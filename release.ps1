@@ -15,8 +15,12 @@ Write-Host ""
 Write-Host "==> Release v$version" -ForegroundColor Cyan
 Write-Host ""
 
+# 0. Pull les derniers changements
+Write-Host "[0/7] Git pull..." -ForegroundColor Yellow
+git pull origin main --rebase
+
 # 1. Met a jour version.txt
-Write-Host "[1/6] Mise a jour version.txt..." -ForegroundColor Yellow
+Write-Host "[1/7] Mise a jour version.txt..." -ForegroundColor Yellow
 Set-Content -Path "version.txt" -Value $version
 
 # 2. Met a jour CURRENT_VERSION dans app.py
