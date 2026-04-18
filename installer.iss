@@ -7,7 +7,7 @@
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName={#MyAppName}
-AppVersion=2.2.3
+AppVersion=2.3
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\DariasMagicTool
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=installer_output
-OutputBaseFilename=DariasMagicTool-Setup-v2.2.3
+OutputBaseFilename=DariasMagicTool-Setup-v2.3
 SetupIconFile=revolvit.ico
 Compression=lzma
 SolidCompression=yes
@@ -35,6 +35,10 @@ Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\zones.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\pages\*"; DestDir: "{app}\pages"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "revolvit.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "credentials.enc"; DestDir: "{app}"; Flags: ignoreversion
+Source: "credentials.salt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "locationiq.enc"; DestDir: "{app}"; Flags: ignoreversion
+Source: "locationiq.salt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\revolvit.ico"

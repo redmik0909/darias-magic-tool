@@ -10,7 +10,7 @@ from pages.equipe import EquipePage
 from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.2.3"
+CURRENT_VERSION = "2.3"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
 
@@ -96,7 +96,7 @@ class DariaApp(ctk.CTk):
         bottom = ctk.CTkFrame(self.sidebar, fg_color="#16305a")
         bottom.pack(side="bottom", fill="x")
         label(bottom, "RevolvIT", size=11, weight="bold", color="#ffffff").pack(anchor="w", padx=14, pady=(10,0))
-        label(bottom, "v2.0", size=10, color="#4a6a9f").pack(anchor="w", padx=14, pady=(0,10))
+        label(bottom, f"v{CURRENT_VERSION}", size=10, color="#4a6a9f").pack(anchor="w", padx=14, pady=(0,10))
 
         # ── Content ───────────────────────────────────────────────────────────
         self.content = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
@@ -108,6 +108,9 @@ class DariaApp(ctk.CTk):
             "equipe":    EquipePage(self.content, self.data),
             "route":     RoutePage(self.content, self.data),
         }
+        self._finish_build()
+
+    def _finish_build(self):
         self._switch_tab("accueil")
 
         # Check for updates in background
