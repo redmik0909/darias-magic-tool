@@ -5,6 +5,7 @@ import threading
 from config import C, label
 from utils import load_zones
 from pages.accueil import AccueilPage
+from pages.recherche import RecherchePage
 from pages.equipe import EquipePage
 from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
@@ -67,9 +68,10 @@ class DariaApp(ctk.CTk):
 
         self.nav_buttons = {}
         nav_items = [
-            ("accueil", "🏠", "Accueil"),
-            ("equipe",  "👥", "Équipe"),
-            ("route",   "🗺", "Route"),
+            ("accueil",   "🏠", "Accueil"),
+            ("recherche", "🔍", "Recherche"),
+            ("equipe",    "👥", "Équipe"),
+            ("route",     "🗺", "Route"),
         ]
         for key, icon, text in nav_items:
             row = ctk.CTkFrame(nav_frame, fg_color="transparent")
@@ -101,9 +103,10 @@ class DariaApp(ctk.CTk):
         self.content.pack(side="left", fill="both", expand=True)
 
         self.pages = {
-            "accueil": AccueilPage(self.content, self.data),
-            "equipe":  EquipePage(self.content, self.data),
-            "route":   RoutePage(self.content, self.data),
+            "accueil":   AccueilPage(self.content),
+            "recherche": RecherchePage(self.content, self.data),
+            "equipe":    EquipePage(self.content, self.data),
+            "route":     RoutePage(self.content, self.data),
         }
         self._switch_tab("accueil")
 
@@ -129,8 +132,10 @@ class DariaApp(ctk.CTk):
         popup.title("Mise à jour disponible")
         popup.geometry("420x220")
         popup.configure(fg_color=C["bg"])
+        popup.attributes("-topmost", True)
         popup.lift()
         popup.focus_force()
+        popup.grab_set()
 
         # Header
         hdr = ctk.CTkFrame(popup, fg_color="#1e3a5f", corner_radius=0)

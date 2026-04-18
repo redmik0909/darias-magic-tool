@@ -25,7 +25,64 @@ if os.path.exists(_OLD_DATA_DIR):
         if os.path.isfile(old_f) and not os.path.exists(new_f):
             shutil.copy(old_f, new_f)
 
-GEOCODIO_API_KEY = "6426426bb3d928dc1be1c39e6633d8c8419e624"
+GEOCODIO_API_KEY  = "6426426bb3d928dc1be1c39e6633d8c8419e624"
+
+def _load_locationiq_key():
+    """Decrypt LocationIQ key from encrypted file using password from keyring."""
+    try:
+        import keyring
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        from cryptography.hazmat.primitives import hashes
+        import base64
+
+        enc_file  = os.path.join(BASE_DIR, "locationiq.enc")
+        salt_file = os.path.join(BASE_DIR, "locationiq.salt")
+
+        if not os.path.exists(enc_file) or not os.path.exists(salt_file):
+            return ""
+
+        pwd = keyring.get_password("DariasMagicTool", "locationiq_pwd")
+        if not pwd:
+            return ""
+
+        with open(salt_file, "rb") as f:
+            salt = f.read()
+        with open(enc_file, "rb") as f:
+            encrypted = f.read()
+
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
+                          salt=salt, iterations=480000)
+        key = base64.urlsafe_b64encode(kdf.derive(pwd.encode()))
+        f   = Fernet(key)
+        return f.decrypt(encrypted).decode()
+    except Exception:
+        return ""
+
+LOCATIONIQ_KEY = _load_locationiq_key()
+
+
+def _locationiq_geocode(address, country="ca"):
+    """Geocode using LocationIQ API. Returns raw result or None."""
+    try:
+        params = urllib.parse.urlencode({
+            "key":             LOCATIONIQ_KEY,
+            "q":               address,
+            "countrycodes":    country,
+            "addressdetails":  1,
+            "format":          "json",
+            "limit":           1,
+            "accept-language": "fr",
+        })
+        url = f"https://us1.locationiq.com/v1/search?{params}"
+        req = urllib.request.Request(url, headers={"User-Agent": "DariasMagicTool/2.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        if data and len(data) > 0:
+            return data[0]
+    except Exception:
+        pass
+    return None
 
 # ── Text ───────────────────────────────────────────────────────────────────────
 def normalize(text):
@@ -380,6 +437,31 @@ def _resolve_postal_code(postal_code):
     return None, None
 
 
+def _parse_pasted_address(address):
+    """
+    Parse pasted addresses like:
+    '189 RUE DES MARGUERITESSAINT-AMABLE QC  J0L 1N0'
+    Returns cleaned address string for Nominatim.
+    """
+    addr = address.strip()
+
+    # Extract postal code
+    postal_match = re.search(r'([A-Z][0-9][A-Z])\s*([0-9][A-Z][0-9])', addr.upper())
+    postal = None
+    if postal_match:
+        postal = postal_match.group(1) + postal_match.group(2)
+        # Remove postal code from address
+        addr = addr[:postal_match.start()].strip()
+
+    # Remove province code (QC, ON, etc.)
+    addr = re.sub(r'\s+[A-Z]{2}\s*$', '', addr.strip())
+
+    # Add comma and Quebec for Nominatim
+    if postal:
+        return f"{addr}, Quebec, Canada", postal
+    return f"{addr}, Quebec, Canada", None
+
+
 def geocode_address(address):
     """Returns (city, full_address) or (None, None). Used by Accueil page."""
     clean     = address.replace(" ", "").upper()
@@ -389,8 +471,19 @@ def geocode_address(address):
         city, display = _resolve_postal_code(clean)
         return (city, display) if city else (None, None)
 
+    # Parse pasted address format
+    cleaned_addr, postal = _parse_pasted_address(address)
+
     g = Nominatim(user_agent="darias_magic_tool_v2")
-    for query in [address + ", Québec, Canada", address + ", Canada", address]:
+    queries = [cleaned_addr]
+    if postal:
+        # Also try with just the postal code as fallback
+        fsa = postal[:3]
+        if fsa in FSA_MAP:
+            city_from_fsa = FSA_MAP[fsa]
+            queries.append(f"{cleaned_addr.split(',')[0]}, {city_from_fsa}, Quebec, Canada")
+    queries += [address + ", Québec, Canada", address + ", Canada"]
+    for query in queries:
         try:
             loc = g.geocode(query, addressdetails=True, language="fr", timeout=10)
             if loc:
@@ -459,20 +552,15 @@ def geocode_coords(address):
                 pass
         return None
 
-    # Adresse normale — Nominatim SANS country_codes filter
-    g = Nominatim(user_agent="darias_magic_tool_v2")
-    for query in [
-        address + ", Québec, Canada",
-        address + ", Quebec, Canada",
-        address + ", Canada",
-        address,
-    ]:
-        try:
-            loc = g.geocode(query, timeout=10)
-            if loc:
-                return loc.latitude, loc.longitude, loc.address
-        except Exception:
-            continue
+    # Adresse normale — LocationIQ
+    for query in [address + ", Canada", address]:
+        result = _locationiq_geocode(query)
+        if result:
+            lat     = float(result.get("lat", 0))
+            lon     = float(result.get("lon", 0))
+            display = result.get("display_name", address)
+            if lat and lon:
+                return lat, lon, display
 
     return None
 
