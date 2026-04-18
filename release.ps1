@@ -49,7 +49,9 @@ Copy-Item "pages" -Destination "dist\pages" -Recurse -Force
 
 # 5. Compile l'installateur
 Write-Host "[5/7] Compilation Inno Setup..." -ForegroundColor Yellow
-(Get-Content installer.iss) -replace 'OutputBaseFilename=DariasMagicTool-Setup-v.*', "OutputBaseFilename=DariasMagicTool-Setup-v$version" | Set-Content installer.iss
+(Get-Content installer.iss) `
+    -replace 'OutputBaseFilename=DariasMagicTool-Setup-v.*', "OutputBaseFilename=DariasMagicTool-Setup-v$version" `
+    -replace 'AppVersion=.*', "AppVersion=$version" | Set-Content installer.iss
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss | Out-Null
 Write-Host "    Inno Setup termine!" -ForegroundColor Green
 
