@@ -10,9 +10,77 @@ from pages.equipe import EquipePage
 from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.3.1"
+CURRENT_VERSION = "2.3.2"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
+
+
+def _check_google_setup():
+    """Check if Google credentials password is in keyring."""
+    try:
+        import keyring
+        pwd = keyring.get_password("DariasMagicTool", "google_creds_password")
+        if not pwd:
+            return False
+        from crypto_utils import decrypt_credentials
+        data = decrypt_credentials()
+        return data is not None
+    except Exception:
+        return False
+
+
+def _show_google_setup(app):
+    """Show Google credentials setup window on first launch."""
+    from crypto_utils import decrypt_with_password
+    import keyring
+
+    dialog = ctk.CTkToplevel(app)
+    dialog.title("Configuration Google Calendar")
+    dialog.geometry("460x300")
+    dialog.configure(fg_color=C["bg"])
+    dialog.attributes("-topmost", True)
+    dialog.lift()
+    dialog.focus_force()
+    dialog.grab_set()
+    dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+    hdr = ctk.CTkFrame(dialog, fg_color="#1e3a5f", corner_radius=0)
+    hdr.pack(fill="x")
+    label(hdr, "  🔐  Configuration requise",
+          size=14, weight="bold", color="#ffffff").pack(side="left", pady=14, padx=8)
+
+    label(dialog,
+          "Premier lancement - entrez le mot de passe pour activer Google Calendar.",
+          size=12, color=C["text"], justify="center").pack(pady=(20, 4))
+    label(dialog,
+          "Contactez votre administrateur si vous ne l avez pas.",
+          size=11, color=C["text_muted"]).pack(pady=(0, 16))
+
+    pwd_entry = ctk.CTkEntry(dialog, placeholder_text="Mot de passe...",
+                              show="*", height=40, width=300,
+                              font=ctk.CTkFont(size=13))
+    pwd_entry.pack(pady=(0, 8))
+
+    err_var = ctk.StringVar(value="")
+    ctk.CTkLabel(dialog, textvariable=err_var,
+                 font=ctk.CTkFont(size=11),
+                 text_color=C["red"]).pack()
+
+    def confirm():
+        pwd = pwd_entry.get().strip()
+        if not pwd:
+            err_var.set("Entrez un mot de passe.")
+            return
+        data = decrypt_with_password(pwd)
+        if not data:
+            err_var.set("❌  Mot de passe incorrect. Réessayez.")
+            pwd_entry.delete(0, "end")
+            return
+        keyring.set_password("DariasMagicTool", "google_creds_password", pwd)
+        dialog.destroy()
+
+    btn(dialog, "✅  Confirmer", confirm,
+        width=200, height=40, color=C["green"], hover=C["green_h"]).pack(pady=16)
 
 
 class DariaApp(ctk.CTk):
