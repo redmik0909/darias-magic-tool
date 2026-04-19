@@ -10,7 +10,7 @@ from pages.equipe import EquipePage
 from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.3.5"
+CURRENT_VERSION = "2.3.6"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
 
@@ -89,9 +89,11 @@ class DariaApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Daria's Magic Tool")
-        self.geometry("1000x760")
-        self.minsize(800, 600)
-        self.after(0, lambda: self.state("zoomed"))
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        self.geometry(f"{sw}x{sh}+0+0")
+        self.minsize(700, 500)
+        self.after(100, lambda: self.state("zoomed"))
         self.configure(fg_color=C["bg"])
         self.data = load_zones()
 
@@ -109,7 +111,10 @@ class DariaApp(ctk.CTk):
 
     def _build_ui(self):
         # ── Sidebar ───────────────────────────────────────────────────────────
-        self.sidebar = ctk.CTkFrame(self, fg_color="#1e3a5f", corner_radius=0, width=200)
+        # Responsive sidebar — 15% of screen width, min 160, max 220
+        sw = self.winfo_screenwidth()
+        sidebar_w = max(160, min(220, int(sw * 0.15)))
+        self.sidebar = ctk.CTkFrame(self, fg_color="#1e3a5f", corner_radius=0, width=sidebar_w)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
 
@@ -150,11 +155,11 @@ class DariaApp(ctk.CTk):
             b = ctk.CTkButton(
                 row,
                 text=f"   {icon}   {text}",
-                width=176, height=46,
+                width=sidebar_w - 24, height=max(36, int(self.winfo_screenheight() * 0.055)),
                 corner_radius=10, anchor="w",
                 fg_color="transparent",
                 hover_color="#2a4a7f",
-                font=ctk.CTkFont(size=13),
+                font=ctk.CTkFont(size=max(11, int(sw * 0.007))),
                 text_color="#bfdbfe",
                 command=lambda k=key: self._switch_tab(k)
             )
