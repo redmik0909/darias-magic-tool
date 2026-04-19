@@ -285,26 +285,20 @@ class RecherchePage(ctk.CTkFrame):
         threading.Thread(target=self._load_cal, daemon=True).start()
 
     def _open_map(self):
-        """Open client address on map using LocationIQ coords."""
-        from utils import geocode_coords
-        import tempfile, webbrowser as wb
-        coords = self.client_coords
-        if not coords:
-            # Try to geocode again
-            result = geocode_coords(self.client_address)
-            if result:
-                coords = (result[0], result[1])
+        if self.client_coords:
+            lat, lon = self.client_coords
+            webbrowser.open(f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom=16")
+        else:
+            webbrowser.open(f"https://www.openstreetmap.org/search?query={self.client_address.replace(' ', '+')}")
 
+    def _open_map(self):
+        import webbrowser as wb
+        coords = self.client_coords
         if coords:
             lat, lon = coords
-            # Open in OpenStreetMap with marker
-            url = f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom=16"
-            wb.open(url)
+            wb.open(f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom=16")
         else:
-            # Fallback — search by address
-            import webbrowser
-            webbrowser.open(
-                f"https://www.openstreetmap.org/search?query={self.client_address.replace(' ', '+')}")
+            wb.open(f"https://www.openstreetmap.org/search?query={self.client_address.replace(' ', '+')}")
 
     # ── Day click ─────────────────────────────────────────────────────────────
     def _on_day_click(self, date_key, events):
