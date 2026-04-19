@@ -7,7 +7,7 @@
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName={#MyAppName}
-AppVersion=2.3.2
+AppVersion=2.3.3
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\DariasMagicTool
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=installer_output
-OutputBaseFilename=DariasMagicTool-Setup-v2.3.2
+OutputBaseFilename=DariasMagicTool-Setup-v2.3.3
 SetupIconFile=revolvit.ico
 Compression=lzma
 SolidCompression=yes

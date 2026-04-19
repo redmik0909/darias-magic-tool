@@ -10,7 +10,7 @@ from pages.equipe import EquipePage
 from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.3.2"
+CURRENT_VERSION = "2.3.3"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
 
@@ -60,6 +60,8 @@ def _show_google_setup(app):
                               show="*", height=40, width=300,
                               font=ctk.CTkFont(size=13))
     pwd_entry.pack(pady=(0, 8))
+    pwd_entry.bind("<Return>", lambda e: confirm())
+    pwd_entry.focus()
 
     err_var = ctk.StringVar(value="")
     ctk.CTkLabel(dialog, textvariable=err_var,
