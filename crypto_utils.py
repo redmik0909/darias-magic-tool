@@ -11,10 +11,22 @@ from cryptography.hazmat.primitives import hashes
 
 APP_NAME    = "DariasMagicTool"
 KEYRING_KEY = "google_creds_password"
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-CREDS_FILE  = os.path.join(BASE_DIR, "credentials.json")
-ENC_FILE    = os.path.join(BASE_DIR, "credentials.enc")
-SALT_FILE   = os.path.join(BASE_DIR, "credentials.salt")
+# Support both dev (script dir) and installed (parent dir) locations
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_parent_dir = os.path.dirname(_script_dir)
+
+def _find_file(filename):
+    """Find a file in script dir or parent dir."""
+    for d in [_script_dir, _parent_dir]:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            return path
+    return os.path.join(_script_dir, filename)  # default
+
+BASE_DIR    = _script_dir
+CREDS_FILE  = _find_file("credentials.json")
+ENC_FILE    = _find_file("credentials.enc")
+SALT_FILE   = _find_file("credentials.salt")
 
 
 def _derive_key(password: str, salt: bytes) -> bytes:
@@ -45,10 +57,13 @@ def encrypt_credentials(password: str) -> bool:
 
     encrypted = f.encrypt(data)
 
-    with open(ENC_FILE, "wb") as fp:
+    enc_path  = os.path.join(_script_dir, "credentials.enc")
+    salt_path = os.path.join(_script_dir, "credentials.salt")
+
+    with open(enc_path, "wb") as fp:
         fp.write(encrypted)
 
-    with open(SALT_FILE, "wb") as fp:
+    with open(salt_path, "wb") as fp:
         fp.write(salt)
 
     # Store password in Windows keyring
