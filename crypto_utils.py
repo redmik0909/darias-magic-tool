@@ -11,22 +11,26 @@ from cryptography.hazmat.primitives import hashes
 
 APP_NAME    = "DariasMagicTool"
 KEYRING_KEY = "google_creds_password"
-# Support both dev (script dir) and installed (parent dir) locations
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_parent_dir = os.path.dirname(_script_dir)
+import sys
 
-def _find_file(filename):
-    """Find a file in script dir or parent dir."""
-    for d in [_script_dir, _parent_dir]:
-        path = os.path.join(d, filename)
-        if os.path.exists(path):
-            return path
-    return os.path.join(_script_dir, filename)  # default
+def _get_app_dir():
+    """Get the app directory whether running as script or compiled exe."""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled PyInstaller exe
+        return os.path.dirname(sys.executable)
+    else:
+        # Running as script — go up from pages/ to root
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # If we're in pages/, go up one level
+        if os.path.basename(script_dir).lower() == 'pages':
+            return os.path.dirname(script_dir)
+        return script_dir
 
-BASE_DIR    = _script_dir
-CREDS_FILE  = _find_file("credentials.json")
-ENC_FILE    = _find_file("credentials.enc")
-SALT_FILE   = _find_file("credentials.salt")
+BASE_DIR   = _get_app_dir()
+CREDS_FILE = os.path.join(BASE_DIR, "credentials.json")
+ENC_FILE   = os.path.join(BASE_DIR, "credentials.enc")
+SALT_FILE  = os.path.join(BASE_DIR, "credentials.salt")
+_script_dir = BASE_DIR
 
 
 def _derive_key(password: str, salt: bytes) -> bytes:
