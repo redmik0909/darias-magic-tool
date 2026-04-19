@@ -10,7 +10,7 @@ from pages.equipe import EquipePage
 from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.3"
+CURRENT_VERSION = "2.3.1"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
 
@@ -112,6 +112,10 @@ class DariaApp(ctk.CTk):
 
     def _finish_build(self):
         self._switch_tab("accueil")
+
+        # Check Google credentials on first launch
+        if not _check_google_setup():
+            self.after(500, lambda: _show_google_setup(self))
 
         # Check for updates in background
         threading.Thread(target=self._check_update, daemon=True).start()
