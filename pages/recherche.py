@@ -25,8 +25,8 @@ class RecherchePage(ctk.CTkFrame):
         self.client_address = ""
         self.client_coords  = None
         self.suggest_frame  = None
-        self.zone_reps      = []   # all reps for current zone sorted by priority
-        self.prio_index     = 0    # current rep index
+        self.zone_reps      = []
+        self.prio_index     = 0
         self._build()
 
     def _build(self):
@@ -40,7 +40,6 @@ class RecherchePage(ctk.CTkFrame):
         body.columnconfigure(1, weight=3)
         body.rowconfigure(0, weight=1)
 
-        # Left panel
         self.left = ctk.CTkFrame(body, fg_color=C["surface"], corner_radius=8,
                                   border_width=1, border_color=C["border"])
         self.left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
@@ -73,7 +72,6 @@ class RecherchePage(ctk.CTkFrame):
               "Entrez une adresse pour voir\nle representant et son calendrier",
               size=12, color=C["text_dim"], justify="center").pack(pady=40)
 
-        # Right panel — placeholder
         self.right_container = ctk.CTkFrame(body, fg_color=C["surface"], corner_radius=8,
                                              border_width=1, border_color=C["border"])
         self.right_container.grid(row=0, column=1, sticky="nsew")
@@ -136,7 +134,6 @@ class RecherchePage(ctk.CTkFrame):
         self.prio_index = 0
         self._show_rep_info(zone)
 
-        # Create calendar widget
         max_rdv = p1_rep.get("rdv_par_jour") or 5
         self.cal_widget = GoogleCalWidget(
             self.right_container, p1_rep,
@@ -145,13 +142,11 @@ class RecherchePage(ctk.CTkFrame):
         )
         self.cal_widget.pack(fill="both", expand=True)
 
-        # Add suggestion button at bottom of left panel (always visible)
         self.suggest_btn = btn(self.left, "Calculer les suggestions",
             self._start_suggestions,
             width=220, height=36, color=C["green"], hover=C["green_h"])
         self.suggest_btn.pack(padx=8, pady=8)
 
-        # Find cal_id and load
         threading.Thread(target=self._load_cal, daemon=True).start()
 
     def _load_cal(self):
@@ -189,17 +184,15 @@ class RecherchePage(ctk.CTkFrame):
         if len(self.zone_reps) > 1:
             next_idx = self.prio_index + 1
             prev_idx = self.prio_index - 1
-
             if next_idx < len(self.zone_reps):
                 next_rep = self.zone_reps[next_idx]
-                btn(nav_row, f"P{next_rep['priorite']} →",
+                btn(nav_row, f"P{next_rep['priorite']} ->",
                     lambda: self._switch_prio(next_idx),
                     width=80, height=32, color=C["accent"], hover=C["accent_h"]
                     ).pack(side="right")
-
             if prev_idx >= 0:
                 prev_rep = self.zone_reps[prev_idx]
-                btn(nav_row, f"← P{prev_rep['priorite']}",
+                btn(nav_row, f"<- P{prev_rep['priorite']}",
                     lambda: self._switch_prio(prev_idx),
                     width=80, height=32, color=C["surface2"], hover=C["border"]
                     ).pack(side="right", padx=(0, 4))
@@ -211,7 +204,7 @@ class RecherchePage(ctk.CTkFrame):
 
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.pack(fill="x", padx=12, pady=(10, 4))
-        ctk.CTkLabel(top, text="  PRIORITE 1  ",
+        ctk.CTkLabel(top, text=f"  PRIORITE {rep['priorite']}  ",
                      font=ctk.CTkFont(size=10, weight="bold"),
                      fg_color=C["p1"], text_color="white",
                      corner_radius=4).pack(side="left", padx=(0, 10))
@@ -242,14 +235,13 @@ class RecherchePage(ctk.CTkFrame):
         label(addr_card, self.client_address, size=12, weight="bold",
               color=C["text"]).pack(anchor="w", padx=12, pady=(0, 10))
 
+    # ── Switch priority ────────────────────────────────────────────────────────
     def _switch_prio(self, idx):
-        """Switch to a different priority rep for the same zone."""
         if idx < 0 or idx >= len(self.zone_reps):
             return
         self.prio_index = idx
         self.rep        = self.zone_reps[idx]
 
-        # Get current zone info
         zone = None
         for z in self.data["zones"]:
             if any(r["nom"] == self.rep["nom"] for r in z["representants"]):
@@ -258,7 +250,6 @@ class RecherchePage(ctk.CTkFrame):
         if not zone:
             return
 
-        # Destroy old suggest button if exists
         if hasattr(self, "suggest_btn") and self.suggest_btn.winfo_exists():
             self.suggest_btn.destroy()
         if self.suggest_frame and self.suggest_frame.winfo_exists():
@@ -267,13 +258,11 @@ class RecherchePage(ctk.CTkFrame):
 
         self._show_rep_info(zone)
 
-        # Add suggest button again
         self.suggest_btn = btn(self.left, "Calculer les suggestions",
             self._start_suggestions,
             width=220, height=36, color=C["green"], hover=C["green_h"])
         self.suggest_btn.pack(padx=8, pady=8)
 
-        # Clear and reload calendar
         self._clear_right()
         max_rdv = self.rep.get("rdv_par_jour") or 5
         self.cal_widget = GoogleCalWidget(
@@ -284,6 +273,7 @@ class RecherchePage(ctk.CTkFrame):
         self.cal_widget.pack(fill="both", expand=True)
         threading.Thread(target=self._load_cal, daemon=True).start()
 
+    # ── Map ────────────────────────────────────────────────────────────────────
     def _open_map(self):
         if self.client_coords:
             lat, lon = self.client_coords
@@ -291,19 +281,8 @@ class RecherchePage(ctk.CTkFrame):
         else:
             webbrowser.open(f"https://www.openstreetmap.org/search?query={self.client_address.replace(' ', '+')}")
 
-    def _open_map(self):
-        import webbrowser as wb
-        coords = self.client_coords
-        if coords:
-            lat, lon = coords
-            wb.open(f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom=16")
-        else:
-            wb.open(f"https://www.openstreetmap.org/search?query={self.client_address.replace(' ', '+')}")
-
     # ── Day click ─────────────────────────────────────────────────────────────
     def _on_day_click(self, date_key, events):
-        """Called when user clicks a day in the calendar."""
-        # Show day detail popup
         self._show_day_popup(date_key, events)
 
     def _show_day_popup(self, date_key, events):
@@ -371,9 +350,9 @@ class RecherchePage(ctk.CTkFrame):
         if not self.cal_widget:
             return
 
-        today    = datetime.today()
-        max_rdv  = self.rep.get("rdv_par_jour") or 5
-        scored   = []
+        today        = datetime.today()
+        max_rdv      = self.rep.get("rdv_par_jour") or 5
+        scored       = []
         month_events = self.cal_widget.get_month_events()
 
         for date_key, events in month_events.items():
