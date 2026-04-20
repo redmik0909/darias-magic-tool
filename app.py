@@ -10,7 +10,7 @@ from pages.equipe import EquipePage
 from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.4.2"
+CURRENT_VERSION = "2.4.3"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
 

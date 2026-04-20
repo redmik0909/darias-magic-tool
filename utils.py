@@ -63,6 +63,9 @@ def _locationiq_geocode(address, country="ca"):
     """Geocode using LocationIQ API. Returns raw result or None."""
     try:
         key = _load_locationiq_key()
+        import logging
+        logging.basicConfig(filename=os.path.join(os.environ.get("APPDATA", ""), "DariasMagicTool", "debug.log"), level=logging.DEBUG)
+        logging.debug(f"LocationIQ key loaded: {'YES' if key else 'NO'}, address: {address}")
         if not key:
             return None
         params = urllib.parse.urlencode({
