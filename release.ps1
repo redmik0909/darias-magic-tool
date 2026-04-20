@@ -42,10 +42,12 @@ venv\Scripts\activate
 pyinstaller --onefile --windowed --name "Darias-Magic-Tool" --icon "revolvit.ico" --add-data "zones.json;." --add-data "pages;pages" app.py --noconfirm | Out-Null
 Write-Host "    PyInstaller termine!" -ForegroundColor Green
 
-# 4. Copie les fichiers dans dist
+# 4. Copie les fichiers dans dist — supprime d'abord pour eviter dist\pages\pages\
 Write-Host "[4/7] Copie des fichiers..." -ForegroundColor Yellow
 Copy-Item "zones.json" -Destination "dist\" -Force
-Copy-Item "pages" -Destination "dist\pages" -Recurse -Force
+Remove-Item "dist\pages" -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item "pages\*" -Destination "dist\pages" -Recurse -Force
+Write-Host "    Pages copiees!" -ForegroundColor Green
 
 # 5. Compile l'installateur
 Write-Host "[5/7] Compilation Inno Setup..." -ForegroundColor Yellow
