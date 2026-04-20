@@ -1,57 +1,50 @@
 import json
 import os
 import re
+import sys
 import unicodedata
 import urllib.request
 import urllib.parse
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+from functools import lru_cache
 
+# ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 ZONES_FILE = os.path.join(BASE_DIR, "zones.json")
 
-# Données dans AppData — jamais écrasées lors des mises à jour
-APP_DATA   = os.path.join(os.environ.get("APPDATA", BASE_DIR), "DariasMagicTool")
-DATA_DIR   = os.path.join(APP_DATA, "rdv_data")
-os.makedirs(DATA_DIR, exist_ok=True)
-
-# Migration automatique — copie les anciens rdv_data vers AppData si nécessaire
-_OLD_DATA_DIR = os.path.join(BASE_DIR, "rdv_data")
-if os.path.exists(_OLD_DATA_DIR):
-    import shutil
-    for f in os.listdir(_OLD_DATA_DIR):
-        old_f = os.path.join(_OLD_DATA_DIR, f)
-        new_f = os.path.join(DATA_DIR, f)
-        if os.path.isfile(old_f) and not os.path.exists(new_f):
-            shutil.copy(old_f, new_f)
-
-GEOCODIO_API_KEY  = "6426426bb3d928dc1be1c39e6633d8c8419e624"
-
 def _get_install_dir():
-    """Get the actual installation directory — works for both script and compiled exe."""
-    import sys
+    """Works for both dev (script) and compiled PyInstaller exe."""
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
+# ── API Keys ───────────────────────────────────────────────────────────────────
+GEOCODIO_API_KEY = "6426426bb3d928dc1be1c39e6633d8c8419e624"
+
+_locationiq_key_cache = None
+
 def _load_locationiq_key():
-    """Decrypt LocationIQ key from encrypted file using password from keyring."""
+    """Load and cache LocationIQ key — decrypts only once per session."""
+    global _locationiq_key_cache
+    if _locationiq_key_cache is not None:
+        return _locationiq_key_cache
+
     try:
-        import keyring
+        import keyring, base64
         from cryptography.fernet import Fernet
         from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
         from cryptography.hazmat.primitives import hashes
-        import base64
 
-        install_dir = _get_install_dir()
-        enc_file  = os.path.join(install_dir, "locationiq.enc")
-        salt_file = os.path.join(install_dir, "locationiq.salt")
+        d         = _get_install_dir()
+        enc_file  = os.path.join(d, "locationiq.enc")
+        salt_file = os.path.join(d, "locationiq.salt")
 
         if not os.path.exists(enc_file) or not os.path.exists(salt_file):
+            _locationiq_key_cache = ""
             return ""
 
         pwd = keyring.get_password("DariasMagicTool", "locationiq_pwd")
         if not pwd:
+            _locationiq_key_cache = ""
             return ""
 
         with open(salt_file, "rb") as f:
@@ -59,115 +52,92 @@ def _load_locationiq_key():
         with open(enc_file, "rb") as f:
             encrypted = f.read()
 
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
-                          salt=salt, iterations=480000)
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480000)
         key = base64.urlsafe_b64encode(kdf.derive(pwd.encode()))
-        f   = Fernet(key)
-        return f.decrypt(encrypted).decode()
+        _locationiq_key_cache = Fernet(key).decrypt(encrypted).decode()
+        return _locationiq_key_cache
     except Exception:
+        _locationiq_key_cache = ""
         return ""
 
 def _locationiq_geocode(address, country="ca"):
-    """Geocode using LocationIQ API. Returns raw result or None."""
+    """Geocode using LocationIQ. Returns raw result dict or None."""
+    key = _load_locationiq_key()
+    if not key:
+        return None
     try:
-        key = _load_locationiq_key()
-        import logging
-        logging.basicConfig(filename=os.path.join(os.environ.get("APPDATA", ""), "DariasMagicTool", "debug.log"), level=logging.DEBUG)
-        logging.debug(f"LocationIQ key loaded: {'YES' if key else 'NO'}, address: {address}")
-        if not key:
-            return None
         params = urllib.parse.urlencode({
-            "key":             key,
-            "q":               address,
-            "countrycodes":    country,
-            "addressdetails":  1,
-            "format":          "json",
-            "limit":           1,
-            "accept-language": "fr",
+            "key": key, "q": address,
+            "countrycodes": country, "addressdetails": 1,
+            "format": "json", "limit": 1, "accept-language": "fr",
         })
-        url = f"https://us1.locationiq.com/v1/search?{params}"
-        req = urllib.request.Request(url, headers={"User-Agent": "DariasMagicTool/2.0"})
+        req = urllib.request.Request(
+            f"https://us1.locationiq.com/v1/search?{params}",
+            headers={"User-Agent": "DariasMagicTool/2.0"}
+        )
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-        if data and len(data) > 0:
-            return data[0]
+        return data[0] if data else None
     except Exception:
-        pass
-    return None
+        return None
 
-# ── Text ───────────────────────────────────────────────────────────────────────
+# ── Text normalization ─────────────────────────────────────────────────────────
 def normalize(text):
     text = text.lower().strip()
     text = unicodedata.normalize("NFD", text)
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-    text = re.sub(r"[-–—']", " ", text)  # include apostrophe
+    text = re.sub(r"[-–—']", " ", text)
     return re.sub(r"\s+", " ", text)
 
 # ── Zones ──────────────────────────────────────────────────────────────────────
 def load_zones():
-    with open(ZONES_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    # Try install dir first (for compiled exe), then BASE_DIR
+    for d in [_get_install_dir(), BASE_DIR]:
+        f = os.path.join(d, "zones.json")
+        if os.path.exists(f):
+            with open(f, "r", encoding="utf-8") as fp:
+                return json.load(fp)
+    raise FileNotFoundError("zones.json not found")
 
-def _get_mrc_for_city(city):
-    """Ask Nominatim for the MRC/region of a city we don't recognize."""
-    try:
-        g = Nominatim(user_agent="darias_magic_tool_v2")
-        loc = g.geocode(f"{city}, Québec, Canada", addressdetails=True, language="fr", timeout=10)
-        if loc:
-            addr = loc.raw.get("address", {})
-            return (
-                addr.get("county") or
-                addr.get("state_district") or
-                addr.get("state") or ""
-            )
-    except Exception:
-        pass
-    return ""
-
+def get_all_reps(zones_data):
+    seen, reps = set(), []
+    for zone in zones_data["zones"]:
+        for rep in zone["representants"]:
+            if rep["nom"] not in seen:
+                seen.add(rep["nom"])
+                reps.append({"rep": rep, "zone": zone})
+    return reps
 
 def _match_to_zone(text, data):
-    """Try to match a text string to a zone using city list, MRC map, and region map."""
     if not text:
         return None
     norm = normalize(text)
 
-    # Hors territoire
     for ht in data["hors_territoire"]:
         if norm == normalize(ht) or normalize(ht) in norm:
             return "hors_territoire"
 
-    # City list
     for zone in data["zones"]:
         for ville in zone["villes"]:
             if norm == normalize(ville) or normalize(ville) in norm:
                 return zone["id"]
 
-    # MRC map
     for key, zid in MRC_MAP.items():
         if norm == key or key in norm or norm in key:
             return zid
 
-    # Region map
     for key, zid in REGION_MAP.items():
         if norm == key or key in norm or norm in key:
             return zid
 
     return None
 
-
 def find_zone(city, data):
-    """
-    city can be a plain city name OR a pipe-separated string:
-    'city|county|region' returned by geocode_address.
-    Tries each level until a zone is found.
-    """
-    # Parse pipe-separated levels if present
-    parts = city.split("|") if "|" in city else [city, "", ""]
-    city_name  = parts[0].strip() if len(parts) > 0 else city
-    county     = parts[1].strip() if len(parts) > 1 else ""
-    region     = parts[2].strip() if len(parts) > 2 else ""
+    parts     = city.split("|") if "|" in city else [city, "", ""]
+    city_name = parts[0].strip() if parts else city
+    county    = parts[1].strip() if len(parts) > 1 else ""
+    region    = parts[2].strip() if len(parts) > 2 else ""
 
-    # Try each level
     for text in [city_name, county, region]:
         if not text:
             continue
@@ -180,15 +150,6 @@ def find_zone(city, data):
                 return zone, city_name or text
 
     return None, None
-
-def get_all_reps(zones_data):
-    seen, reps = set(), []
-    for zone in zones_data["zones"]:
-        for rep in zone["representants"]:
-            if rep["nom"] not in seen:
-                seen.add(rep["nom"])
-                reps.append({"rep": rep, "zone": zone})
-    return reps
 
 # ── FSA → City map ─────────────────────────────────────────────────────────────
 FSA_MAP = {
@@ -282,148 +243,86 @@ FSA_MAP = {
     "G6G": "Thetford Mines", "G6H": "Thetford Mines",
 }
 
-# ── MRC/Région → Zone mapping ─────────────────────────────────────────────────
-# Quand une ville n'est pas trouvée directement, on utilise sa MRC ou région
+# ── MRC/Région → Zone mapping ──────────────────────────────────────────────────
 MRC_MAP = {
-    # Rive-Sud / Montérégie
-    "marguerite-d'youville": "montreal_rive_sud",
     "marguerite d youville": "montreal_rive_sud",
     "roussillon": "montreal_rive_sud",
-    "le haut-richelieu": "montreal_rive_sud",
     "haut-richelieu": "montreal_rive_sud",
-    "la vallée-du-richelieu": "montreal_rive_sud",
     "vallee du richelieu": "montreal_rive_sud",
     "rouville": "montreal_rive_sud",
-    "les maskoutains": "montreal_rive_sud",
     "maskoutains": "montreal_rive_sud",
     "brome-missisquoi": "montreal_rive_sud",
     "longueuil": "montreal_rive_sud",
-    "agglomération de longueuil": "montreal_rive_sud",
     "vaudreuil-soulanges": "montreal_rive_sud",
     "beauharnois-salaberry": "montreal_rive_sud",
-    "le haut-saint-laurent": "montreal_rive_sud",
     "haut saint laurent": "montreal_rive_sud",
-    "montérégie": "montreal_rive_sud",
     "monteregie": "montreal_rive_sud",
-    # Rive-Nord / Laurentides / Laval
-    "thérèse-de-blainville": "rive_nord",
     "therese de blainville": "rive_nord",
     "deux-montagnes": "rive_nord",
     "mirabel": "rive_nord",
-    "la rivière-du-nord": "rive_nord",
     "riviere du nord": "rive_nord",
     "laurentides": "rive_nord",
-    "les laurentides": "rive_nord",
     "argenteuil": "rive_nord",
     "laval": "rive_nord",
     "les moulins": "rive_nord",
-    "l'assomption": "rive_nord",
     "assomption": "rive_nord",
-    # Lanaudière / TR
     "joliette": "lanaudiere_tr",
-    "d'autray": "lanaudiere_tr",
     "autray": "lanaudiere_tr",
     "matawinie": "lanaudiere_tr",
     "montcalm": "lanaudiere_tr",
-    "les moulins": "lanaudiere_tr",
-    "lanaudière": "lanaudiere_tr",
     "lanaudiere": "lanaudiere_tr",
     "francheville": "lanaudiere_tr",
-    "maskinongé": "lanaudiere_tr",
     "maskinonge": "lanaudiere_tr",
-    "bécancour": "lanaudiere_tr",
     "becancour": "lanaudiere_tr",
     "nicolet-yamaska": "lanaudiere_tr",
     "mauricie": "lanaudiere_tr",
-    # Québec / Lévis
-    "québec": "quebec",
-    "communauté métropolitaine de québec": "quebec",
-    "lévis": "quebec",
+    "quebec": "quebec",
     "levis": "quebec",
-    "la côte-de-beaupré": "quebec",
     "cote de beaupre": "quebec",
-    "l'île-d'orléans": "quebec",
     "ile d orleans": "quebec",
     "portneuf": "quebec",
     "charlevoix": "quebec",
-    "chaudière-appalaches": "quebec",
     "chaudiere appalaches": "quebec",
     "bellechasse": "quebec",
     "la nouvelle-beauce": "sherbrooke_beauce",
     "robert-cliche": "sherbrooke_beauce",
     "beauce-sartigan": "sherbrooke_beauce",
-    # Gatineau / Outaouais
     "gatineau": "gatineau",
-    "les collines-de-l'outaouais": "gatineau",
     "collines de l outaouais": "gatineau",
     "papineau": "gatineau",
     "outaouais": "gatineau",
     "pontiac": "gatineau",
-    # Sherbrooke / Estrie
     "sherbrooke": "sherbrooke_beauce",
-    "memphrémagog": "sherbrooke_beauce",
     "memphremagog": "sherbrooke_beauce",
-    "le val-saint-françois": "sherbrooke_beauce",
     "val saint francois": "sherbrooke_beauce",
     "coaticook": "sherbrooke_beauce",
-    "le haut-saint-françois": "sherbrooke_beauce",
     "haut saint francois": "sherbrooke_beauce",
     "estrie": "sherbrooke_beauce",
     "granit": "sherbrooke_beauce",
-    # Saguenay
     "saguenay": "saguenay",
-    "lac-saint-jean-est": "saguenay",
     "lac saint jean est": "saguenay",
-    "domaine-du-roy": "saguenay",
     "domaine du roy": "saguenay",
     "maria-chapdelaine": "saguenay",
-    "le fjord-du-saguenay": "saguenay",
     "fjord du saguenay": "saguenay",
-    "saguenay-lac-saint-jean": "saguenay",
 }
 
-# ── Région administrative → Zone mapping ──────────────────────────────────────
 REGION_MAP = {
-    # Montérégie → Rive-Sud
     "monteregie": "montreal_rive_sud",
-    "montérégie": "montreal_rive_sud",
-    # Laval → Rive-Nord
     "laval": "rive_nord",
-    # Laurentides → Rive-Nord
     "laurentides": "rive_nord",
-    "les laurentides": "rive_nord",
-    # Lanaudière → Lanaudière/TR
     "lanaudiere": "lanaudiere_tr",
-    "lanaudière": "lanaudiere_tr",
-    # Mauricie → Lanaudière/TR
     "mauricie": "lanaudiere_tr",
-    "la mauricie": "lanaudiere_tr",
-    # Centre-du-Québec → Sherbrooke/Beauce
-    "centre-du-quebec": "sherbrooke_beauce",
     "centre du quebec": "sherbrooke_beauce",
-    "centre-du-québec": "sherbrooke_beauce",
-    # Estrie → Sherbrooke/Beauce
     "estrie": "sherbrooke_beauce",
-    # Chaudière-Appalaches → Québec
-    "chaudiere-appalaches": "quebec",
-    "chaudière-appalaches": "quebec",
     "chaudiere appalaches": "quebec",
-    # Capitale-Nationale → Québec
-    "capitale-nationale": "quebec",
     "capitale nationale": "quebec",
-    # Saguenay-Lac-Saint-Jean → Saguenay
-    "saguenay-lac-saint-jean": "saguenay",
     "saguenay lac saint jean": "saguenay",
-    # Outaouais → Gatineau
     "outaouais": "gatineau",
-    # Montréal → Montréal/Rive-Sud
     "montreal": "montreal_rive_sud",
-    "montréal": "montreal_rive_sud",
 }
 
 # ── Geocoding ──────────────────────────────────────────────────────────────────
 def _resolve_postal_code(postal_code):
-    """Resolve postal code to (city, display_address)."""
     clean     = postal_code.replace(" ", "").upper()
     formatted = clean[:3] + " " + clean[3:]
     fsa       = clean[:3]
@@ -432,49 +331,31 @@ def _resolve_postal_code(postal_code):
         city = FSA_MAP[fsa]
         return city, f"{formatted}, {city}, Québec, Canada"
 
-    try:
-        g   = Nominatim(user_agent="darias_magic_tool_v2")
-        loc = g.geocode(f"{formatted}, Canada", addressdetails=True,
-                        language="fr", timeout=10)
-        if loc:
-            addr = loc.raw.get("address", {})
-            city = (addr.get("city") or addr.get("town") or
-                    addr.get("village") or addr.get("municipality") or "")
-            if city:
-                return city, loc.address
-    except Exception:
-        pass
+    # Fallback — LocationIQ
+    result = _locationiq_geocode(f"{formatted}, Canada")
+    if result:
+        addr = result.get("address", {})
+        city = (addr.get("city") or addr.get("town") or
+                addr.get("village") or addr.get("municipality") or "")
+        if city:
+            return city, result.get("display_name", formatted)
 
     return None, None
 
-
 def _parse_pasted_address(address):
-    """
-    Parse pasted addresses like:
-    '189 RUE DES MARGUERITESSAINT-AMABLE QC  J0L 1N0'
-    Returns cleaned address string for Nominatim.
-    """
-    addr = address.strip()
-
-    # Extract postal code
+    addr         = address.strip()
     postal_match = re.search(r'([A-Z][0-9][A-Z])\s*([0-9][A-Z][0-9])', addr.upper())
-    postal = None
+    postal       = None
     if postal_match:
         postal = postal_match.group(1) + postal_match.group(2)
-        # Remove postal code from address
-        addr = addr[:postal_match.start()].strip()
-
-    # Remove province code (QC, ON, etc.)
+        addr   = addr[:postal_match.start()].strip()
     addr = re.sub(r'\s+[A-Z]{2}\s*$', '', addr.strip())
-
-    # Add comma and Quebec for Nominatim
     if postal:
         return f"{addr}, Quebec, Canada", postal
     return f"{addr}, Quebec, Canada", None
 
-
 def geocode_address(address):
-    """Returns (city, full_address) or (None, None). Used by Accueil page."""
+    """Returns (city_pipe_string, full_address) or (None, None)."""
     clean     = address.replace(" ", "").upper()
     is_postal = bool(re.match(r"^[A-Z][0-9][A-Z][0-9][A-Z][0-9]$", clean))
 
@@ -482,58 +363,51 @@ def geocode_address(address):
         city, display = _resolve_postal_code(clean)
         return (city, display) if city else (None, None)
 
-    # Parse pasted address format
     cleaned_addr, postal = _parse_pasted_address(address)
 
-    g = Nominatim(user_agent="darias_magic_tool_v2")
-    queries = [cleaned_addr]
-    if postal:
-        # Also try with just the postal code as fallback
-        fsa = postal[:3]
-        if fsa in FSA_MAP:
-            city_from_fsa = FSA_MAP[fsa]
-            queries.append(f"{cleaned_addr.split(',')[0]}, {city_from_fsa}, Quebec, Canada")
-    queries += [address + ", Québec, Canada", address + ", Canada"]
+    # Try LocationIQ first
+    queries = [cleaned_addr, address + ", Quebec, Canada", address + ", Canada"]
+    if postal and postal[:3] in FSA_MAP:
+        city_from_fsa = FSA_MAP[postal[:3]]
+        queries.insert(1, f"{cleaned_addr.split(',')[0]}, {city_from_fsa}, Quebec, Canada")
+
     for query in queries:
-        try:
-            loc = g.geocode(query, addressdetails=True, language="fr", timeout=10)
-            if loc:
-                addr = loc.raw.get("address", {})
+        result = _locationiq_geocode(query)
+        if result:
+            addr   = result.get("address", {})
+            city   = (addr.get("city") or addr.get("town") or addr.get("village") or
+                      addr.get("hamlet") or addr.get("municipality") or
+                      addr.get("suburb") or "")
+            county = addr.get("county") or ""
+            region = addr.get("state_district") or addr.get("state") or ""
+            if city or county or region:
+                return f"{city}|{county}|{region}", result.get("display_name", address)
 
-                # On retourne toutes les infos utiles séparées par |
-                # pour que find_zone puisse essayer chaque niveau
-                city    = (addr.get("city") or addr.get("town") or
-                           addr.get("village") or addr.get("hamlet") or
-                           addr.get("municipality") or addr.get("suburb") or "")
-                county  = addr.get("county") or ""
-                region  = addr.get("state_district") or addr.get("state") or ""
-
-                # On retourne city|county|region comme identifiant
-                # find_zone va essayer chaque niveau
-                combined = city or county or region
-                if combined:
-                    return f"{city}|{county}|{region}", loc.address
-
-        except (GeocoderTimedOut, GeocoderServiceError):
-            continue
-    return None, None
-
-
-def _log(msg):
+    # Fallback — Nominatim
     try:
-        log_path = os.path.join(os.environ.get("APPDATA", ""), "DariasMagicTool", "debug.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
+        from geopy.geocoders import Nominatim
+        from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+        g = Nominatim(user_agent="darias_magic_tool_v2")
+        for query in [cleaned_addr, address + ", Quebec, Canada"]:
+            try:
+                loc = g.geocode(query, addressdetails=True, language="fr", timeout=10)
+                if loc:
+                    addr   = loc.raw.get("address", {})
+                    city   = (addr.get("city") or addr.get("town") or addr.get("village") or
+                              addr.get("hamlet") or addr.get("municipality") or "")
+                    county = addr.get("county") or ""
+                    region = addr.get("state_district") or addr.get("state") or ""
+                    if city or county or region:
+                        return f"{city}|{county}|{region}", loc.address
+            except (GeocoderTimedOut, GeocoderServiceError):
+                continue
     except Exception:
         pass
 
+    return None, None
+
 def geocode_coords(address):
-    """
-    Returns (lat, lon, display_name) or None. Used by Route page.
-    - Postal codes → Geocodio
-    - Addresses    → Nominatim (sans filtre country_codes)
-    """
-    _log(f"geocode_coords called: {address}")
+    """Returns (lat, lon, display_name) or None."""
     clean     = address.replace(" ", "").upper()
     is_postal = bool(re.match(r"^[A-Z][0-9][A-Z][0-9][A-Z][0-9]$", clean))
 
@@ -543,80 +417,69 @@ def geocode_coords(address):
             params = urllib.parse.urlencode({
                 "q": formatted + ", Canada",
                 "api_key": GEOCODIO_API_KEY,
-                "country": "CA",
-                "limit": 1,
+                "country": "CA", "limit": 1,
             })
-            url = "https://api.geocod.io/v1.7/geocode?" + params
-            req = urllib.request.Request(url, headers={"User-Agent": "darias_magic_tool_v2"})
+            req = urllib.request.Request(
+                "https://api.geocod.io/v1.7/geocode?" + params,
+                headers={"User-Agent": "darias_magic_tool_v2"}
+            )
             with urllib.request.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read())
             results = data.get("results", [])
             if results:
-                loc     = results[0]
-                lat     = loc["location"]["lat"]
-                lon     = loc["location"]["lng"]
-                display = loc.get("formatted_address", formatted)
-                return lat, lon, display
+                loc = results[0]
+                return loc["location"]["lat"], loc["location"]["lng"], loc.get("formatted_address", formatted)
         except Exception:
             pass
 
         fsa  = clean[:3]
         city = FSA_MAP.get(fsa)
         if city:
-            try:
-                g   = Nominatim(user_agent="darias_magic_tool_v2")
-                loc = g.geocode(f"{city}, Quebec, Canada", timeout=10)
-                if loc:
-                    return loc.latitude, loc.longitude, f"{formatted}, {city}, Quebec"
-            except Exception:
-                pass
+            result = _locationiq_geocode(f"{city}, Quebec, Canada")
+            if result:
+                return float(result["lat"]), float(result["lon"]), f"{formatted}, {city}, Quebec"
         return None
 
-    # Adresse normale — LocationIQ
-    _log(f"Trying LocationIQ for: {address}")
+    # Normal address — LocationIQ
     for query in [address + ", Canada", address]:
         result = _locationiq_geocode(query)
-        _log(f"LocationIQ result for '{query}': {result is not None}")
         if result:
-            lat     = float(result.get("lat", 0))
-            lon     = float(result.get("lon", 0))
-            display = result.get("display_name", address)
+            lat = float(result.get("lat", 0))
+            lon = float(result.get("lon", 0))
             if lat and lon:
-                return lat, lon, display
+                return lat, lon, result.get("display_name", address)
 
     return None
-
 
 # ── OSRM Routing ───────────────────────────────────────────────────────────────
 def osrm_route(coords):
     """Returns (duration_matrix, order, total_seconds, geometry) or (None,None,None,None)."""
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in coords)
-
-    table_url = (f"https://router.project-osrm.org/table/v1/driving/{coord_str}"
-                 f"?annotations=duration")
     try:
-        with urllib.request.urlopen(table_url, timeout=15) as r:
-            table_data = json.loads(r.read())
-        durations = table_data.get("durations", [])
+        with urllib.request.urlopen(
+            f"https://router.project-osrm.org/table/v1/driving/{coord_str}?annotations=duration",
+            timeout=15
+        ) as r:
+            durations = json.loads(r.read()).get("durations", [])
     except Exception:
         return None, None, None, None
 
-    trip_url = (f"https://router.project-osrm.org/trip/v1/driving/{coord_str}"
-                f"?roundtrip=false&source=first&annotations=duration")
     try:
-        with urllib.request.urlopen(trip_url, timeout=15) as r:
+        with urllib.request.urlopen(
+            f"https://router.project-osrm.org/trip/v1/driving/{coord_str}?roundtrip=false&source=first&annotations=duration",
+            timeout=15
+        ) as r:
             trip_data = json.loads(r.read())
     except Exception:
         return durations, list(range(len(coords))), None, None
 
     waypoints = trip_data.get("waypoints", [])
-    order     = [wp["waypoint_index"] for wp in waypoints]
     trips     = trip_data.get("trips", [])
+    order     = [wp["waypoint_index"] for wp in waypoints]
     total     = trips[0]["duration"] if trips else None
     geometry  = trips[0].get("geometry") if trips else None
 
     return durations, order, total, geometry
-
 
 def decode_polyline(encoded):
     """Decode Google encoded polyline to list of (lat, lon)."""
@@ -646,8 +509,11 @@ def decode_polyline(encoded):
         coords.append((lat / 1e5, lng / 1e5))
     return coords
 
+# ── RDV Storage (legacy — kept for compatibility) ──────────────────────────────
+APP_DATA = os.path.join(os.environ.get("APPDATA", BASE_DIR), "DariasMagicTool")
+DATA_DIR = os.path.join(APP_DATA, "rdv_data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# ── RDV Storage ────────────────────────────────────────────────────────────────
 def rep_data_file(rep_nom):
     safe = re.sub(r"[^a-z0-9]", "_", normalize(rep_nom))
     return os.path.join(DATA_DIR, f"{safe}.json")
