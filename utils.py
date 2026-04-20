@@ -511,12 +511,21 @@ def geocode_address(address):
     return None, None
 
 
+def _log(msg):
+    try:
+        log_path = os.path.join(os.environ.get("APPDATA", ""), "DariasMagicTool", "debug.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+
 def geocode_coords(address):
     """
     Returns (lat, lon, display_name) or None. Used by Route page.
     - Postal codes → Geocodio
     - Addresses    → Nominatim (sans filtre country_codes)
     """
+    _log(f"geocode_coords called: {address}")
     clean     = address.replace(" ", "").upper()
     is_postal = bool(re.match(r"^[A-Z][0-9][A-Z][0-9][A-Z][0-9]$", clean))
 
@@ -556,8 +565,10 @@ def geocode_coords(address):
         return None
 
     # Adresse normale — LocationIQ
+    _log(f"Trying LocationIQ for: {address}")
     for query in [address + ", Canada", address]:
         result = _locationiq_geocode(query)
+        _log(f"LocationIQ result for '{query}': {result is not None}")
         if result:
             lat     = float(result.get("lat", 0))
             lon     = float(result.get("lon", 0))
