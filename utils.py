@@ -27,6 +27,13 @@ if os.path.exists(_OLD_DATA_DIR):
 
 GEOCODIO_API_KEY  = "6426426bb3d928dc1be1c39e6633d8c8419e624"
 
+def _get_install_dir():
+    """Get the actual installation directory — works for both script and compiled exe."""
+    import sys
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
 def _load_locationiq_key():
     """Decrypt LocationIQ key from encrypted file using password from keyring."""
     try:
@@ -36,8 +43,9 @@ def _load_locationiq_key():
         from cryptography.hazmat.primitives import hashes
         import base64
 
-        enc_file  = os.path.join(BASE_DIR, "locationiq.enc")
-        salt_file = os.path.join(BASE_DIR, "locationiq.salt")
+        install_dir = _get_install_dir()
+        enc_file  = os.path.join(install_dir, "locationiq.enc")
+        salt_file = os.path.join(install_dir, "locationiq.salt")
 
         if not os.path.exists(enc_file) or not os.path.exists(salt_file):
             return ""
