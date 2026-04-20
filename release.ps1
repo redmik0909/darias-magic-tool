@@ -26,7 +26,9 @@ $repo = "redmik0909/darias-magic-tool"
 
 # 0. Pull les derniers changements
 Write-Host "[0/7] Git pull..." -ForegroundColor Yellow
+git stash
 git pull origin main --rebase
+git stash pop
 
 # 1. Met a jour version.txt
 Write-Host "[1/7] Mise a jour version.txt..." -ForegroundColor Yellow
