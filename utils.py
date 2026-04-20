@@ -59,14 +59,14 @@ def _load_locationiq_key():
     except Exception:
         return ""
 
-LOCATIONIQ_KEY = _load_locationiq_key()
-
-
 def _locationiq_geocode(address, country="ca"):
     """Geocode using LocationIQ API. Returns raw result or None."""
     try:
+        key = _load_locationiq_key()
+        if not key:
+            return None
         params = urllib.parse.urlencode({
-            "key":             LOCATIONIQ_KEY,
+            "key":             key,
             "q":               address,
             "countrycodes":    country,
             "addressdetails":  1,
