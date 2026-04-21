@@ -1,11 +1,20 @@
-import customtkinter as ctk
 import threading
 import webbrowser
 from datetime import datetime
-from config import C, ZONE_COLORS, label, btn
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QLineEdit, QPushButton, QScrollArea, QSplitter, QApplication
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
+
+from config import COLORS, ZONE_COLORS, PRIORITY_COLORS, MOIS_FR, JOURS_FR, styled_btn
 from utils import geocode_address, find_zone, geocode_coords, osrm_route
 from google_cal import format_time
-from pages.cal_widget import GoogleCalWidget, find_cal_id, is_real_rdv, is_blocked_day, get_avoided_slots, MOIS_FR, JOURS_FR, show_day_popup
+from pages.cal_widget import (
+    GoogleCalWidget, find_cal_id, is_real_rdv,
+    is_blocked_day, get_avoided_slots, show_day_popup
+)
 
 CRENEAUX = [
     ("9h00",  "9h00 – 10h00"),
@@ -16,300 +25,48 @@ CRENEAUX = [
 ]
 
 
-class RecherchePage(ctk.CTkFrame):
-    def __init__(self, parent, data):
-        super().__init__(parent, fg_color=C["bg"])
-        self.data           = data
-        self.rep            = None
-        self.cal_widget     = None
-        self.client_address = ""
-        self.client_coords  = None
-        self.suggest_frame  = None
-        self.zone_reps      = []
-        self.prio_index     = 0
-        self._build()
+class WorkerSignals(QObject):
+    result  = pyqtSignal(object, str)
+    error   = pyqtSignal(str)
+    hors    = pyqtSignal(str)
 
-    def _build(self):
-        ph = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
-        ph.pack(fill="x")
-        label(ph, "Recherche de territoire", size=16, weight="bold").pack(side="left", padx=20, pady=14)
 
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=12, pady=10)
-        body.columnconfigure(0, weight=2)
-        body.columnconfigure(1, weight=3)
-        body.rowconfigure(0, weight=1)
+class SearchWorker(threading.Thread):
+    def __init__(self, address, data, signals):
+        super().__init__(daemon=True)
+        self.address = address
+        self.data    = data
+        self.signals = signals
 
-        self.left = ctk.CTkFrame(body, fg_color=C["surface"], corner_radius=8,
-                                  border_width=1, border_color=C["border"])
-        self.left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-
-        search_card = ctk.CTkFrame(self.left, fg_color=C["surface2"], corner_radius=8)
-        search_card.pack(fill="x", padx=14, pady=(14, 10))
-        label(search_card, "Adresse du client", size=12,
-              color=C["text_muted"]).pack(anchor="w", padx=12, pady=(10, 4))
-
-        row = ctk.CTkFrame(search_card, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=(0, 10))
-
-        self.entry = ctk.CTkEntry(row, placeholder_text="Adresse ou code postal...",
-            height=40, font=ctk.CTkFont(size=13), corner_radius=6,
-            fg_color=C["surface"], border_color=C["border"])
-        self.entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.entry.bind("<Return>", lambda e: self._search())
-
-        self.search_btn = btn(row, "Rechercher", self._search, width=120, height=40)
-        self.search_btn.pack(side="left")
-
-        self.status_var = ctk.StringVar(value="")
-        ctk.CTkLabel(search_card, textvariable=self.status_var,
-                     font=ctk.CTkFont(size=11),
-                     text_color=C["text_muted"]).pack(anchor="w", padx=12, pady=(0, 6))
-
-        self.rep_frame = ctk.CTkScrollableFrame(self.left, fg_color="transparent")
-        self.rep_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        label(self.rep_frame,
-              "Entrez une adresse pour voir\nle representant et son calendrier",
-              size=12, color=C["text_dim"], justify="center").pack(pady=40)
-
-        self.right_container = ctk.CTkFrame(body, fg_color=C["surface"], corner_radius=8,
-                                             border_width=1, border_color=C["border"])
-        self.right_container.grid(row=0, column=1, sticky="nsew")
-        label(self.right_container, "Le calendrier s affichera ici",
-              size=13, color=C["text_dim"]).pack(expand=True)
-
-    def refresh(self):
-        if self.cal_widget:
-            self.cal_widget.load(self.cal_widget.cal_id)
-
-    def _clear_rep(self):
-        for w in self.rep_frame.winfo_children():
-            w.destroy()
-
-    def _clear_right(self):
-        for w in self.right_container.winfo_children():
-            w.destroy()
-
-    # ── Search ────────────────────────────────────────────────────────────────
-    def _search(self):
-        address = self.entry.get().strip()
-        if not address:
-            return
-        self.client_address = address
-        self.search_btn.configure(state="disabled", text="Recherche...")
-        self.status_var.set("Geolocalisation en cours...")
-        self._clear_rep()
-        threading.Thread(target=self._worker, args=(address,), daemon=True).start()
-
-    def _worker(self, address):
-        city, full_address = geocode_address(address)
+    def run(self):
+        city, full_address = geocode_address(self.address)
         if not city:
-            self.after(0, self._err, "Adresse introuvable")
+            self.signals.error.emit("Adresse introuvable")
             return
-        # geocode_coords reuses the cached LocationIQ key — fast second call
-        coords = geocode_coords(full_address or address)
-        if coords:
-            self.client_coords = (coords[0], coords[1])
+        coords = geocode_coords(full_address or self.address)
         zone, _ = find_zone(city, self.data)
         if zone == "hors_territoire":
-            self.after(0, self._hors_territoire, city)
+            self.signals.hors.emit(city)
         elif zone is None:
-            self.after(0, self._err, f"Zone non configuree pour : {city}")
+            self.signals.error.emit(f"Zone non configurée pour : {city}")
         else:
-            self.after(0, self._show, zone, city)
+            self.signals.result.emit((zone, coords), city)
 
-    def _show(self, zone, city):
-        self._clear_rep()
-        self._clear_right()
-        self.search_btn.configure(state="normal", text="Rechercher")
-        self.status_var.set(f"Ville detectee : {city}")
 
-        p1_rep = next((r for r in zone["representants"] if r["priorite"] == 1), None)
-        if not p1_rep:
-            label(self.rep_frame, "Aucun representant Priorite 1.",
-                  size=12, color=C["text_muted"]).pack(pady=20)
-            return
+class SuggestWorker(threading.Thread):
+    def __init__(self, rep, month_events, client_coords, signals):
+        super().__init__(daemon=True)
+        self.rep          = rep
+        self.month_events = month_events
+        self.client_coords = client_coords
+        self.signals      = signals
 
-        self.rep        = p1_rep
-        self.zone_reps  = sorted(zone["representants"], key=lambda r: r["priorite"])
-        self.prio_index = 0
-        self._show_rep_info(zone)
-
-        max_rdv = p1_rep.get("rdv_par_jour") or 5
-        self.cal_widget = GoogleCalWidget(
-            self.right_container, p1_rep,
-            on_day_click=self._on_day_click,
-            max_rdv=max_rdv
-        )
-        self.cal_widget.pack(fill="both", expand=True)
-
-        self._make_suggest_btn()
-        threading.Thread(target=self._load_cal, daemon=True).start()
-
-    def _load_cal(self):
-        cal_id = find_cal_id(self.rep)
-        if cal_id:
-            self.after(0, lambda: self.cal_widget.load(cal_id))
-        else:
-            self.after(0, lambda: self.status_var.set("Calendrier Google non trouve"))
-
-    def _start_suggestions(self):
-        if not self.client_coords:
-            self.status_var.set("Coordonnees client introuvables.")
-            return
-        self.suggest_btn.configure(state="disabled", text="Calcul en cours...")
-        self._show_suggestions_loading()
-        threading.Thread(target=self._compute_suggestions, daemon=True).start()
-
-    # ── Rep info ──────────────────────────────────────────────────────────────
-    def _show_rep_info(self, zone):
-        self._clear_rep()
-        zone_color = ZONE_COLORS.get(zone["id"], C["accent"])
-
-        banner = ctk.CTkFrame(self.rep_frame, fg_color=zone_color, corner_radius=8)
-        banner.pack(fill="x", pady=(4, 8))
-        label(banner, f"  {zone['nom'].upper()}", size=13, weight="bold",
-              color="#ffffff").pack(side="left", padx=12, pady=8)
-
-        nav_row = ctk.CTkFrame(self.rep_frame, fg_color="transparent")
-        nav_row.pack(fill="x", pady=(0, 8))
-
-        btn(nav_row, "Voir sur la carte",
-            lambda: self._open_map(),
-            width=180, height=32, color=C["purple"], hover="#6e40c9").pack(side="left")
-
-        if len(self.zone_reps) > 1:
-            next_idx = self.prio_index + 1
-            prev_idx = self.prio_index - 1
-            if next_idx < len(self.zone_reps):
-                btn(nav_row, "→",
-                    lambda i=next_idx: self._switch_prio(i),
-                    width=40, height=32, color=C["accent"], hover=C["accent_h"]
-                    ).pack(side="right")
-            if prev_idx >= 0:
-                btn(nav_row, "←",
-                    lambda i=prev_idx: self._switch_prio(i),
-                    width=40, height=32, color=C["accent"], hover=C["accent_h"]
-                    ).pack(side="right", padx=(0, 4))
-
-        rep  = self.rep
-        card = ctk.CTkFrame(self.rep_frame, fg_color=C["surface2"], corner_radius=8,
-                            border_width=1, border_color=C["border"])
-        card.pack(fill="x", pady=(0, 8))
-
-        top = ctk.CTkFrame(card, fg_color="transparent")
-        top.pack(fill="x", padx=12, pady=(10, 4))
-        prio        = rep["priorite"]
-        prio_colors = {1: C["green"], 2: C["orange"], 3: C["red"]}
-        prio_color  = prio_colors.get(prio, "#64748b")
-        prio_label  = f"PRIORITE {prio}" if prio <= 3 else "AUTRE"
-        ctk.CTkLabel(top, text=f"  {prio_label}  ",
-                     font=ctk.CTkFont(size=10, weight="bold"),
-                     fg_color=prio_color, text_color="white",
-                     corner_radius=4).pack(side="left", padx=(0, 10))
-        label(top, rep["nom"], size=15, weight="bold").pack(side="left")
-
-        det = ctk.CTkFrame(card, fg_color="transparent")
-        det.pack(fill="x", padx=12, pady=(0, 6))
-        label(det, f"  {rep['calendrier']}", size=11, color=C["accent"], anchor="w").pack(fill="x", pady=1)
-        label(det, f"  {rep['jours']}", size=11, color=C["text_muted"], anchor="w").pack(fill="x", pady=1)
-        if rep.get("rdv_par_jour"):
-            label(det, f"  Max {rep['rdv_par_jour']} RDV/jour", size=11,
-                  color=C["text_muted"], anchor="w").pack(fill="x", pady=1)
-
-        if rep.get("regles"):
-            rb = ctk.CTkFrame(card, fg_color=C["bg"], corner_radius=6)
-            rb.pack(fill="x", padx=12, pady=(4, 10))
-            for r in rep["regles"]:
-                label(rb, f"  {r}", size=10, color=C["orange"],
-                      anchor="w", wraplength=300).pack(fill="x", padx=8, pady=1)
-        else:
-            ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
-
-        addr_card = ctk.CTkFrame(self.rep_frame, fg_color=C["surface2"], corner_radius=8,
-                                  border_width=1, border_color=C["border"])
-        addr_card.pack(fill="x", pady=(0, 8))
-        label(addr_card, "Adresse a booker", size=12, weight="bold",
-              color=C["text_muted"]).pack(anchor="w", padx=12, pady=(10, 4))
-        label(addr_card, self.client_address, size=12, weight="bold",
-              color=C["text"]).pack(anchor="w", padx=12, pady=(0, 10))
-
-    # ── Switch priority ────────────────────────────────────────────────────────
-    def _switch_prio(self, idx):
-        if idx < 0 or idx >= len(self.zone_reps):
-            return
-        self.prio_index = idx
-        self.rep        = self.zone_reps[idx]
-
-        zone = None
-        for z in self.data["zones"]:
-            if any(r["nom"] == self.rep["nom"] for r in z["representants"]):
-                zone = z
-                break
-        if not zone:
-            return
-
-        if hasattr(self, "suggest_btn") and self.suggest_btn.winfo_exists():
-            self.suggest_btn.destroy()
-        if self.suggest_frame and self.suggest_frame.winfo_exists():
-            self.suggest_frame.destroy()
-            self.suggest_frame = None
-
-        self._show_rep_info(zone)
-
-        self._make_suggest_btn()
-        self._clear_right()
+    def run(self):
+        today   = datetime.today()
         max_rdv = self.rep.get("rdv_par_jour") or 5
-        self.cal_widget = GoogleCalWidget(
-            self.right_container, self.rep,
-            on_day_click=self._on_day_click,
-            max_rdv=max_rdv
-        )
-        self.cal_widget.pack(fill="both", expand=True)
-        threading.Thread(target=self._load_cal, daemon=True).start()
+        scored  = []
 
-    def _make_suggest_btn(self):
-        if hasattr(self, "suggest_btn") and self.suggest_btn.winfo_exists():
-            self.suggest_btn.destroy()
-        self.suggest_btn = btn(self.left, "Calculer les suggestions",
-            self._start_suggestions,
-            width=220, height=36, color=C["green"], hover=C["green_h"])
-        self.suggest_btn.pack(padx=8, pady=8)
-
-    # ── Map ────────────────────────────────────────────────────────────────────
-    def _open_map(self):
-        if self.client_coords:
-            lat, lon = self.client_coords
-            webbrowser.open(f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom=16")
-        else:
-            webbrowser.open(f"https://www.openstreetmap.org/search?query={self.client_address.replace(' ', '+')}")
-
-    # ── Day click ─────────────────────────────────────────────────────────────
-    def _on_day_click(self, date_key, events):
-        from pages.cal_widget import show_day_popup
-        show_day_popup(self, self.rep, date_key, events)
-
-    # ── Suggestions ───────────────────────────────────────────────────────────
-    def _show_suggestions_loading(self):
-        if self.suggest_frame and self.suggest_frame.winfo_exists():
-            self.suggest_frame.destroy()
-        self.suggest_frame = ctk.CTkFrame(self.left, fg_color=C["surface2"],
-                                           corner_radius=8, border_width=1,
-                                           border_color=C["border"])
-        self.suggest_frame.pack(fill="x", padx=8, pady=(0, 8))
-        label(self.suggest_frame, "Calcul des meilleures dates...",
-              size=12, color=C["text_muted"]).pack(pady=16)
-
-    def _compute_suggestions(self):
-        if not self.cal_widget:
-            return
-
-        today        = datetime.today()
-        max_rdv      = self.rep.get("rdv_par_jour") or 5
-        scored       = []
-        month_events = self.cal_widget.get_month_events()
-
-        for date_key, events in month_events.items():
+        for date_key, events in self.month_events.items():
             try:
                 day_dt = datetime.strptime(date_key, "%Y-%m-%d")
             except Exception:
@@ -355,98 +112,610 @@ class RecherchePage(ctk.CTkFrame):
             })
 
         scored.sort(key=lambda x: x["score"])
-        self.after(0, self._show_suggestions, scored[:3])
-        self.after(0, lambda: self.suggest_btn.configure(
-            state="normal", text="Recalculer les suggestions"))
+        self.signals.result.emit(scored[:3], "")
 
-    def _show_suggestions(self, suggestions):
-        if self.suggest_frame and self.suggest_frame.winfo_exists():
-            self.suggest_frame.destroy()
 
-        self.suggest_frame = ctk.CTkFrame(self.left, fg_color=C["surface2"],
-                                           corner_radius=8, border_width=1,
-                                           border_color=C["border"])
-        self.suggest_frame.pack(fill="x", padx=8, pady=(0, 8))
+class RecherchePage(QWidget):
+    cal_ready = pyqtSignal(str)
 
-        hdr = ctk.CTkFrame(self.suggest_frame, fg_color="#1e3a5f", corner_radius=8)
-        hdr.pack(fill="x")
-        label(hdr, "  Meilleures disponibilites", size=13, weight="bold",
-              color="#ffffff").pack(side="left", pady=10, padx=8)
+    def __init__(self, data):
+        super().__init__()
+        self.data           = data
+        self.rep            = None
+        self.cal_widget     = None
+        self.client_address = ""
+        self.client_coords  = None
+        self.zone_reps      = []
+        self.prio_index     = 0
+        self.suggest_widget = None
+        self.suggest_btn    = None
+        self.setStyleSheet(f"background-color: {COLORS['bg']};")
+        self.cal_ready.connect(self._on_cal_ready)
+        self._build()
 
-        if not suggestions:
-            label(self.suggest_frame, "Aucune disponibilite trouvee ce mois-ci.",
-                  size=12, color=C["text_muted"]).pack(pady=12)
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header
+        hdr = QFrame()
+        hdr.setStyleSheet(f"background-color: {COLORS['surface']}; border-bottom: 1px solid {COLORS['border']};")
+        hdr.setFixedHeight(52)
+        hdr_l = QHBoxLayout(hdr)
+        hdr_l.setContentsMargins(20, 0, 20, 0)
+        title = QLabel("Recherche de territoire")
+        title.setStyleSheet(f"color: {COLORS['text']}; font-size: 16px; font-weight: bold; background: transparent;")
+        hdr_l.addWidget(title)
+        hdr_l.addStretch()
+        layout.addWidget(hdr)
+
+        # Splitter — left panel / right panel
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setStyleSheet("QSplitter::handle { background-color: transparent; width: 12px; }")
+
+        # ── Left panel ────────────────────────────────────────────────────────
+        left_container = QFrame()
+        left_container.setStyleSheet(f"""
+            QFrame#leftPanel {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
+        left_container.setObjectName("leftPanel")
+        self.left_layout = QVBoxLayout(left_container)
+        self.left_layout.setContentsMargins(0, 0, 0, 0)
+        self.left_layout.setSpacing(0)
+
+        # Search card
+        search_card = QFrame()
+        search_card.setObjectName("searchCard")
+        search_card.setStyleSheet(f"""
+            QFrame#searchCard {{
+                background-color: {COLORS['surface2']};
+                border-radius: 8px;
+                border: none;
+                margin: 14px 14px 10px 14px;
+            }}
+            QFrame#searchCard QLabel {{ border: none; background: transparent; }}
+        """)
+        search_l = QVBoxLayout(search_card)
+        search_l.setContentsMargins(12, 10, 12, 10)
+        search_l.setSpacing(8)
+
+        addr_lbl = QLabel("Adresse du client")
+        addr_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;")
+        search_l.addWidget(addr_lbl)
+
+        entry_row = QHBoxLayout()
+        entry_row.setSpacing(8)
+
+        self.entry = QLineEdit()
+        self.entry.setPlaceholderText("Adresse ou code postal...")
+        self.entry.setFixedHeight(40)
+        self.entry.setStyleSheet(f"""
+            QLineEdit {{
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+                padding: 0 12px;
+                font-size: 13px;
+                background: white;
+                color: {COLORS['text']};
+                selection-background-color: {COLORS['accent']};
+            }}
+            QLineEdit:focus {{ border-color: {COLORS['accent']}; }}
+        """)
+        self.entry.returnPressed.connect(self._search)
+        entry_row.addWidget(self.entry)
+
+        self.search_btn = styled_btn("Rechercher", COLORS["accent"], height=40, width=120)
+        self.search_btn.clicked.connect(self._search)
+        entry_row.addWidget(self.search_btn)
+        search_l.addLayout(entry_row)
+
+        self.status_lbl = QLabel("")
+        self.status_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+        search_l.addWidget(self.status_lbl)
+
+        self.left_layout.addWidget(search_card)
+
+        # Scrollable rep area
+        self.rep_scroll = QScrollArea()
+        self.rep_scroll.setWidgetResizable(True)
+        self.rep_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self.rep_content = QWidget()
+        self.rep_content.setStyleSheet("background: transparent;")
+        self.rep_content_l = QVBoxLayout(self.rep_content)
+        self.rep_content_l.setContentsMargins(8, 0, 8, 8)
+        self.rep_content_l.setSpacing(6)
+
+        placeholder = QLabel("Entrez une adresse pour voir\nle représentant et son calendrier")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 12px; background: transparent;")
+        self.rep_content_l.addWidget(placeholder, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.rep_content_l.addStretch()
+
+        self.rep_scroll.setWidget(self.rep_content)
+        self.left_layout.addWidget(self.rep_scroll)
+
+        splitter.addWidget(left_container)
+
+        # ── Right panel ───────────────────────────────────────────────────────
+        self.right_container = QFrame()
+        self.right_container.setObjectName("rightPanel")
+        self.right_container.setStyleSheet(f"""
+            QFrame#rightPanel {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
+        self.right_layout = QVBoxLayout(self.right_container)
+        self.right_layout.setContentsMargins(0, 0, 0, 0)
+
+        placeholder_r = QLabel("Le calendrier s'affichera ici")
+        placeholder_r.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_r.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 13px; background: transparent;")
+        self.right_layout.addWidget(placeholder_r)
+
+        splitter.addWidget(self.right_container)
+        splitter.setSizes([400, 600])
+
+        layout.addWidget(splitter, stretch=1)
+
+    def refresh(self):
+        if self.cal_widget and self.cal_widget.cal_id:
+            self.cal_widget.load(self.cal_widget.cal_id)
+
+    def _clear_rep(self):
+        while self.rep_content_l.count():
+            item = self.rep_content_l.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _clear_right(self):
+        while self.right_layout.count():
+            item = self.right_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.cal_widget = None
+
+    # ── Search ────────────────────────────────────────────────────────────────
+    def _search(self):
+        address = self.entry.text().strip()
+        if not address:
+            return
+        self.client_address = address
+        self.search_btn.setEnabled(False)
+        self.search_btn.setText("Recherche...")
+        self.status_lbl.setText("Géolocalisation en cours...")
+        self._clear_rep()
+
+        self.search_signals = WorkerSignals()
+        self.search_signals.result.connect(self._on_search_result)
+        self.search_signals.error.connect(self._err)
+        self.search_signals.hors.connect(self._hors_territoire)
+
+        SearchWorker(address, self.data, self.search_signals).start()
+
+    def _on_search_result(self, payload, city):
+        zone, coords = payload
+        self.search_btn.setEnabled(True)
+        self.search_btn.setText("Rechercher")
+        self.status_lbl.setText(f"Ville détectée : {city}")
+
+        if coords:
+            self.client_coords = (coords[0], coords[1])
+
+        p1_rep = next((r for r in zone["representants"] if r["priorite"] == 1), None)
+        if not p1_rep:
+            lbl = QLabel("Aucun représentant Priorité 1.")
+            lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;")
+            self.rep_content_l.addWidget(lbl)
             return
 
-        rank_colors = ["#16a34a", "#2563eb", "#d97706"]
-        medals      = ["#1", "#2", "#3"]
+        self.rep        = p1_rep
+        self.zone_reps  = sorted(zone["representants"], key=lambda r: r["priorite"])
+        self.prio_index = 0
+        self._show_rep_info(zone)
+        self._load_calendar()
 
-        for i, s in enumerate(suggestions):
-            day_parts = s["date_key"].split("-")
-            day_fmt   = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]}"
-            sun_wd    = (s["day_dt"].weekday() + 1) % 7
-            weekday   = JOURS_FR[sun_wd]
+    def _load_calendar(self):
+        self._clear_right()
+        max_rdv = self.rep.get("rdv_par_jour") or 5
+        self.cal_widget = GoogleCalWidget(None, self.rep,
+                                          on_day_click=self._on_day_click,
+                                          max_rdv=max_rdv)
+        self.right_layout.addWidget(self.cal_widget)
 
-            card = ctk.CTkFrame(self.suggest_frame, fg_color=C["surface"],
-                                corner_radius=6, border_width=1, border_color=C["border"])
-            card.pack(fill="x", padx=8, pady=4)
+        # Suggest button at bottom of left
+        self._make_suggest_btn()
 
-            top = ctk.CTkFrame(card, fg_color="transparent")
-            top.pack(fill="x", padx=10, pady=(8, 2))
-            ctk.CTkLabel(top, text=f" {medals[i]} ",
-                         font=ctk.CTkFont(size=11, weight="bold"),
-                         fg_color=rank_colors[i], text_color="white",
-                         corner_radius=4).pack(side="left", padx=(0, 8))
-            label(top, f"{weekday} {day_fmt}  -  {s['slot']}",
-                  size=13, weight="bold").pack(side="left")
+        threading.Thread(target=self._fetch_cal, daemon=True).start()
 
-            det = ctk.CTkFrame(card, fg_color="transparent")
-            det.pack(fill="x", padx=10, pady=(0, 4))
+    def _on_cal_ready(self, cal_id):
+        if cal_id and self.cal_widget:
+            self.cal_widget.load(cal_id)
+        elif not cal_id:
+            self.status_lbl.setText("Calendrier Google non trouvé")
 
-            if s["dist_sec"] is not None:
-                dist_min = int(s["dist_sec"] // 60)
-                rdv_name = s["closest_rdv"].get("summary", "")[:35] if s["closest_rdv"] else ""
-                label(det, f"A {dist_min} min d un RDV existant  -  {s['nb_rdv']} RDV ce jour",
-                      size=10, color=C["text_muted"]).pack(anchor="w")
-                if rdv_name:
-                    label(det, f"   -> {rdv_name}", size=10, color=C["text_dim"]).pack(anchor="w")
-            else:
-                label(det, f"Journee libre  -  {s['nb_rdv']} RDV ce jour",
-                      size=10, color=C["text_muted"]).pack(anchor="w")
+    def _fetch_cal(self):
+        cal_id = find_cal_id(self.rep)
+        if cal_id:
+            self.cal_ready.emit(cal_id)
+        else:
+            self.cal_ready.emit("")
 
-            ctk.CTkButton(card, text="Copier",
-                width=90, height=28, corner_radius=6,
-                fg_color=C["accent"], hover_color=C["accent_h"],
-                font=ctk.CTkFont(size=11, weight="bold"),
-                command=lambda s=s: self._copy(s)
-                ).pack(side="right", padx=10, pady=8)
+    def _make_suggest_btn(self):
+        # Remove old suggest btn and widget
+        if self.suggest_btn:
+            self.suggest_btn.deleteLater()
+            self.suggest_btn = None
+        if self.suggest_widget:
+            self.suggest_widget.deleteLater()
+            self.suggest_widget = None
 
-    def _copy(self, s):
+        self.suggest_btn = styled_btn("💡 Calculer les suggestions", COLORS["green"], height=36)
+        self.suggest_btn.clicked.connect(self._start_suggestions)
+        self.left_layout.addWidget(self.suggest_btn)
+        self.left_layout.setContentsMargins(0, 0, 0, 8)
+
+    # ── Rep info ──────────────────────────────────────────────────────────────
+    def _show_rep_info(self, zone):
+        self._clear_rep()
+        zone_color = ZONE_COLORS.get(zone["id"], COLORS["accent"])
+
+        # Zone banner
+        banner = QFrame()
+        banner.setFixedHeight(36)
+        banner.setStyleSheet(f"background-color: {zone_color}; border-radius: 8px;")
+        banner_l = QHBoxLayout(banner)
+        banner_l.setContentsMargins(12, 0, 12, 0)
+        banner_lbl = QLabel(f"  {zone['nom'].upper()}")
+        banner_lbl.setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;")
+        banner_l.addWidget(banner_lbl)
+        self.rep_content_l.addWidget(banner)
+
+        # Nav row
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(6)
+
+        map_btn = styled_btn("🗺 Voir sur la carte", COLORS["purple"], height=32, width=180)
+        map_btn.clicked.connect(self._open_map)
+        nav_row.addWidget(map_btn)
+        nav_row.addStretch()
+
+        if len(self.zone_reps) > 1:
+            prev_idx = self.prio_index - 1
+            next_idx = self.prio_index + 1
+            if prev_idx >= 0:
+                prev_btn = styled_btn("←", COLORS["accent"], height=32, width=40)
+                prev_btn.clicked.connect(lambda _, i=prev_idx: self._switch_prio(i))
+                nav_row.addWidget(prev_btn)
+            if next_idx < len(self.zone_reps):
+                next_btn = styled_btn("→", COLORS["accent"], height=32, width=40)
+                next_btn.clicked.connect(lambda _, i=next_idx: self._switch_prio(i))
+                nav_row.addWidget(next_btn)
+
+        nav_widget = QWidget()
+        nav_widget.setStyleSheet("background: transparent;")
+        nav_widget.setLayout(nav_row)
+        self.rep_content_l.addWidget(nav_widget)
+
+        # Rep card
+        rep = self.rep
+        card = QFrame()
+        card.setObjectName("repCard")
+        card.setStyleSheet(f"""
+            QFrame#repCard {{
+                background-color: {COLORS['surface2']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+            QFrame#repCard QLabel {{ border: none; background: transparent; }}
+        """)
+        card_l = QVBoxLayout(card)
+        card_l.setContentsMargins(12, 10, 12, 10)
+        card_l.setSpacing(6)
+
+        # Priority badge + name
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        prio       = rep.get("priorite", 99)
+        prio_color = PRIORITY_COLORS.get(prio, "#64748b")
+        prio_label = f"PRIORITÉ {prio}" if prio <= 3 else "AUTRE"
+
+        badge = QLabel(f"  {prio_label}  ")
+        badge.setStyleSheet(f"""
+            background-color: {prio_color};
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+            border-radius: 4px;
+            padding: 3px 4px;
+        """)
+        badge.setFixedHeight(22)
+        top_row.addWidget(badge)
+
+        name_lbl = QLabel(rep["nom"])
+        name_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 15px; font-weight: bold; background: transparent;")
+        top_row.addWidget(name_lbl)
+        top_row.addStretch()
+        card_l.addLayout(top_row)
+
+        cal_lbl = QLabel(f"  {rep.get('calendrier', '')}")
+        cal_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-size: 11px; background: transparent;")
+        card_l.addWidget(cal_lbl)
+
+        jour_lbl = QLabel(f"  {rep.get('jours', '')}")
+        jour_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+        card_l.addWidget(jour_lbl)
+
+        if rep.get("rdv_par_jour"):
+            rdv_lbl = QLabel(f"  Max {rep['rdv_par_jour']} RDV/jour")
+            rdv_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+            card_l.addWidget(rdv_lbl)
+
+        if rep.get("regles"):
+            rules_frame = QFrame()
+            rules_frame.setStyleSheet(f"background-color: {COLORS['bg']}; border-radius: 6px; border: none;")
+            rules_l = QVBoxLayout(rules_frame)
+            rules_l.setContentsMargins(8, 4, 8, 4)
+            for r in rep["regles"]:
+                r_lbl = QLabel(f"  {r}")
+                r_lbl.setWordWrap(True)
+                r_lbl.setStyleSheet(f"color: {COLORS['orange']}; font-size: 10px; background: transparent;")
+                rules_l.addWidget(r_lbl)
+            card_l.addWidget(rules_frame)
+
+        self.rep_content_l.addWidget(card)
+
+        # Address card
+        addr_card = QFrame()
+        addr_card.setObjectName("addrCard")
+        addr_card.setStyleSheet(f"""
+            QFrame#addrCard {{
+                background-color: {COLORS['surface2']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+            QFrame#addrCard QLabel {{ border: none; background: transparent; }}
+        """)
+        addr_l = QVBoxLayout(addr_card)
+        addr_l.setContentsMargins(12, 10, 12, 10)
+        addr_l.setSpacing(4)
+
+        addr_title = QLabel("📍  Adresse à booker")
+        addr_title.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: bold; background: transparent;")
+        addr_l.addWidget(addr_title)
+
+        addr_val = QLabel(self.client_address)
+        addr_val.setWordWrap(True)
+        addr_val.setStyleSheet(f"color: {COLORS['text']}; font-size: 12px; font-weight: bold; background: transparent;")
+        addr_l.addWidget(addr_val)
+
+        self.rep_content_l.addWidget(addr_card)
+        self.rep_content_l.addStretch()
+
+    # ── Switch priority ────────────────────────────────────────────────────────
+    def _switch_prio(self, idx):
+        if idx < 0 or idx >= len(self.zone_reps):
+            return
+        self.prio_index = idx
+        self.rep        = self.zone_reps[idx]
+
+        zone = None
+        for z in self.data["zones"]:
+            if any(r["nom"] == self.rep["nom"] for r in z["representants"]):
+                zone = z
+                break
+        if not zone:
+            return
+
+        self._show_rep_info(zone)
+        self._load_calendar()
+
+    # ── Map ────────────────────────────────────────────────────────────────────
+    def _open_map(self):
+        if self.client_coords:
+            lat, lon = self.client_coords
+            webbrowser.open(f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom=16")
+        else:
+            webbrowser.open(f"https://www.openstreetmap.org/search?query={self.client_address.replace(' ', '+')}")
+
+    # ── Day click ─────────────────────────────────────────────────────────────
+    def _on_day_click(self, date_key, events):
+        show_day_popup(self, self.rep, date_key, events)
+
+    # ── Suggestions ───────────────────────────────────────────────────────────
+    def _start_suggestions(self):
+        if not self.client_coords:
+            self.status_lbl.setText("Coordonnées client introuvables.")
+            return
+        self.suggest_btn.setEnabled(False)
+        self.suggest_btn.setText("Calcul en cours...")
+
+        # Loading widget
+        if self.suggest_widget:
+            self.suggest_widget.deleteLater()
+        self.suggest_widget = QFrame()
+        self.suggest_widget.setObjectName("loadingWidget")
+        self.suggest_widget.setStyleSheet(f"""
+            QFrame#loadingWidget {{
+                background-color: {COLORS['surface2']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+            QFrame#loadingWidget QLabel {{ border: none; background: transparent; }}
+        """)
+        loading_l = QVBoxLayout(self.suggest_widget)
+        loading_lbl = QLabel("⏳  Calcul des meilleures dates...")
+        loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;")
+        loading_l.addWidget(loading_lbl)
+        self.left_layout.insertWidget(self.left_layout.count() - 1, self.suggest_widget)
+
+        self.suggest_signals = WorkerSignals()
+        self.suggest_signals.result.connect(self._show_suggestions)
+
+        SuggestWorker(
+            self.rep,
+            self.cal_widget.get_month_events() if self.cal_widget else {},
+            self.client_coords,
+            self.suggest_signals
+        ).start()
+
+    def _show_suggestions(self, suggestions, _):
+        self.suggest_btn.setEnabled(True)
+        self.suggest_btn.setText("🔄 Recalculer les suggestions")
+
+        if self.suggest_widget:
+            self.suggest_widget.deleteLater()
+
+        self.suggest_widget = QFrame()
+        self.suggest_widget.setObjectName("suggestWidget")
+        self.suggest_widget.setStyleSheet(f"""
+            QFrame#suggestWidget {{
+                background-color: {COLORS['surface2']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+            QFrame#suggestWidget QLabel {{ border: none; background: transparent; }}
+            QFrame#suggestWidget QFrame {{ border: none; }}
+        """)
+        sw_l = QVBoxLayout(self.suggest_widget)
+        sw_l.setContentsMargins(0, 0, 0, 8)
+        sw_l.setSpacing(4)
+
+        # Header
+        hdr = QFrame()
+        hdr.setStyleSheet(f"background-color: {COLORS['sidebar']}; border-radius: 8px 8px 0 0;")
+        hdr.setFixedHeight(40)
+        hdr_l = QHBoxLayout(hdr)
+        hdr_lbl = QLabel("  💡  Meilleures disponibilités")
+        hdr_lbl.setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;")
+        hdr_l.addWidget(hdr_lbl)
+        sw_l.addWidget(hdr)
+
+        if not suggestions:
+            no_lbl = QLabel("Aucune disponibilité trouvée ce mois-ci.")
+            no_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            no_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent; padding: 12px;")
+            sw_l.addWidget(no_lbl)
+        else:
+            rank_colors = ["#16a34a", "#2563eb", "#d97706"]
+            medals      = ["#1", "#2", "#3"]
+
+            for i, s in enumerate(suggestions):
+                day_parts = s["date_key"].split("-")
+                day_fmt   = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]}"
+                sun_wd    = (s["day_dt"].weekday() + 1) % 7
+                weekday   = JOURS_FR[sun_wd]
+
+                card = QFrame()
+                card.setStyleSheet(f"""
+                    QFrame {{
+                        background-color: {COLORS['surface']};
+                        border: 1px solid {COLORS['border']};
+                        border-radius: 6px;
+                        margin: 0 8px;
+                    }}
+                """)
+                card_l = QVBoxLayout(card)
+                card_l.setContentsMargins(10, 8, 10, 8)
+                card_l.setSpacing(4)
+
+                top_row = QHBoxLayout()
+                medal_lbl = QLabel(f" {medals[i]} ")
+                medal_lbl.setStyleSheet(f"""
+                    background-color: {rank_colors[i]};
+                    color: white;
+                    font-size: 11px;
+                    font-weight: bold;
+                    border-radius: 4px;
+                    padding: 2px 6px;
+                """)
+                medal_lbl.setFixedHeight(22)
+                top_row.addWidget(medal_lbl)
+
+                slot_lbl = QLabel(f"{weekday} {day_fmt}  —  {s['slot']}")
+                slot_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 13px; font-weight: bold; background: transparent;")
+                top_row.addWidget(slot_lbl)
+                top_row.addStretch()
+
+                copy_btn = styled_btn("📋 Copier", COLORS["accent"], height=28, width=90)
+                copy_btn.clicked.connect(lambda _, sv=s, wv=weekday, df=day_fmt: self._copy(sv, wv, df))
+                top_row.addWidget(copy_btn)
+                card_l.addLayout(top_row)
+
+                if s["dist_sec"] is not None:
+                    dist_min = int(s["dist_sec"] // 60)
+                    rdv_name = s["closest_rdv"].get("summary", "")[:35] if s["closest_rdv"] else ""
+                    det_lbl  = QLabel(f"📍 À {dist_min} min d'un RDV existant  •  {s['nb_rdv']} RDV ce jour")
+                    det_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; background: transparent;")
+                    card_l.addWidget(det_lbl)
+                    if rdv_name:
+                        rdv_lbl = QLabel(f"   ↳ {rdv_name}")
+                        rdv_lbl.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 10px; background: transparent;")
+                        card_l.addWidget(rdv_lbl)
+                else:
+                    free_lbl = QLabel(f"📅 Journée libre  •  {s['nb_rdv']} RDV ce jour")
+                    free_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; background: transparent;")
+                    card_l.addWidget(free_lbl)
+
+                sw_l.addWidget(card)
+
+        self.left_layout.insertWidget(self.left_layout.count() - 1, self.suggest_widget)
+
+    def _copy(self, s, weekday, day_fmt):
         day_parts = s["date_key"].split("-")
-        day_fmt   = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]} {day_parts[0]}"
-        sun_wd    = (s["day_dt"].weekday() + 1) % 7
-        weekday   = JOURS_FR[sun_wd]
-        text = f"{self.rep['nom']} - {s['slot']} - {weekday} {day_fmt} - {self.client_address}"
-        self.clipboard_clear()
-        self.clipboard_append(text)
-        self.status_var.set(f"Copie : {s['slot']} le {weekday} {day_fmt}")
+        full_fmt  = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]} {day_parts[0]}"
+        text = f"{self.rep['nom']} - {s['slot']} - {weekday} {full_fmt} - {self.client_address}"
+        QApplication.clipboard().setText(text)
+        self.status_lbl.setText(f"📋 Copié : {s['slot']} le {weekday} {day_fmt}")
 
     # ── Errors ────────────────────────────────────────────────────────────────
     def _hors_territoire(self, city):
         self._clear_rep()
         self._clear_right()
-        self.search_btn.configure(state="normal", text="Rechercher")
-        self.status_var.set(f"Ville : {city}")
-        card = ctk.CTkFrame(self.rep_frame, fg_color=C["surface2"], corner_radius=8,
-                            border_width=1, border_color=C["red"])
-        card.pack(fill="x", pady=10)
-        label(card, "HORS TERRITOIRE", size=16, weight="bold",
-              color=C["red"]).pack(pady=(16, 4))
-        label(card, f"La ville {city} n est pas desservie.",
-              size=12, color=C["text_muted"]).pack(pady=(0, 16))
+        self.search_btn.setEnabled(True)
+        self.search_btn.setText("Rechercher")
+        self.status_lbl.setText(f"Ville : {city}")
+
+        card = QFrame()
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['surface2']};
+                border: 1px solid {COLORS['red']};
+                border-radius: 8px;
+            }}
+        """)
+        card_l = QVBoxLayout(card)
+        card_l.setContentsMargins(16, 16, 16, 16)
+        card_l.setSpacing(8)
+
+        title = QLabel("HORS TERRITOIRE")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f"color: {COLORS['red']}; font-size: 16px; font-weight: bold; background: transparent;")
+        card_l.addWidget(title)
+
+        msg = QLabel(f"La ville {city} n'est pas desservie.")
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;")
+        card_l.addWidget(msg)
+
+        self.rep_content_l.addWidget(card)
+        self.rep_content_l.addStretch()
 
     def _err(self, message):
         self._clear_rep()
-        self.search_btn.configure(state="normal", text="Rechercher")
-        self.status_var.set("")
-        label(self.rep_frame, message, size=12, color=C["orange"]).pack(pady=20)
+        self.search_btn.setEnabled(True)
+        self.search_btn.setText("Rechercher")
+        self.status_lbl.setText("")
+
+        err_lbl = QLabel(message)
+        err_lbl.setStyleSheet(f"color: {COLORS['orange']}; font-size: 12px; background: transparent;")
+        self.rep_content_l.addWidget(err_lbl)
+        self.rep_content_l.addStretch()

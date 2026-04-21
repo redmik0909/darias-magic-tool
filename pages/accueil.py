@@ -1,70 +1,109 @@
-import customtkinter as ctk
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame
+from PyQt6.QtCore import Qt, QTimer
 from datetime import datetime
-from config import C, label
 
 JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 MOIS_FR  = ["", "janvier", "février", "mars", "avril", "mai", "juin",
              "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
 
+COLORS = {
+    "bg":       "#f8fafc",
+    "surface":  "#ffffff",
+    "border":   "#e2e8f0",
+    "text":     "#1e293b",
+    "muted":    "#64748b",
+    "dim":      "#94a3b8",
+    "accent":   "#2563eb",
+    "purple":   "#7c3aed",
+}
 
-class AccueilPage(ctk.CTkFrame):
-    def __init__(self, parent):
-        super().__init__(parent, fg_color=C["bg"])
+
+class AccueilPage(QWidget):
+    def __init__(self, data=None):
+        super().__init__()
+        self.setStyleSheet(f"background-color: {COLORS['bg']};")
         self._build()
+
+        # Update clock every minute
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._update_time)
+        self.timer.start(60000)
 
     def _build(self):
-        # Center everything
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(0)
 
-        center = ctk.CTkFrame(self, fg_color="transparent")
-        center.place(relx=0.5, rely=0.5, anchor="center")
+        # Center container
+        center = QWidget()
+        center.setStyleSheet("background: transparent;")
+        center.setFixedWidth(600)
+        center_l = QVBoxLayout(center)
+        center_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center_l.setSpacing(8)
 
-        # Big greeting
-        now     = datetime.now()
-        jour    = JOURS_FR[now.weekday()]
-        date    = f"{jour} {now.day} {MOIS_FR[now.month]} {now.year}"
-        heure   = now.strftime("%H:%M")
+        # Emoji
+        emoji = QLabel("✨")
+        emoji.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        emoji.setStyleSheet(f"color: {COLORS['accent']}; font-size: 72px; background: transparent;")
+        center_l.addWidget(emoji)
 
-        # Logo / icon
-        ctk.CTkLabel(center, text="✨",
-                     font=ctk.CTkFont(size=72),
-                     text_color=C["accent"]).pack(pady=(0, 10))
+        # Greeting
+        greeting = QLabel("Bonjour Daria!")
+        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        greeting.setStyleSheet(f"color: {COLORS['text']}; font-size: 48px; font-weight: bold; background: transparent;")
+        center_l.addWidget(greeting)
 
-        # Main message
-        ctk.CTkLabel(center,
-                     text="Bonjour Daria!",
-                     font=ctk.CTkFont(size=48, weight="bold"),
-                     text_color=C["text"]).pack()
+        sub = QLabel("Ton twin te souhaite un bon shift 💪")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setStyleSheet(f"color: {COLORS['muted']}; font-size: 22px; background: transparent;")
+        center_l.addWidget(sub)
 
-        ctk.CTkLabel(center,
-                     text="Ton twin te souhaite un bon shift 💪",
-                     font=ctk.CTkFont(size=22),
-                     text_color=C["text_muted"]).pack(pady=(8, 24))
+        center_l.addSpacing(24)
 
         # Date & time card
-        date_card = ctk.CTkFrame(center, fg_color=C["surface"], corner_radius=12,
-                                  border_width=1, border_color=C["border"])
-        date_card.pack(pady=(0, 24), padx=40, fill="x")
+        card = QFrame()
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+            }}
+        """)
+        card_l = QVBoxLayout(card)
+        card_l.setContentsMargins(40, 16, 40, 16)
+        card_l.setSpacing(4)
 
-        ctk.CTkLabel(date_card,
-                     text=date,
-                     font=ctk.CTkFont(size=16),
-                     text_color=C["text_muted"]).pack(pady=(16, 4))
+        now   = datetime.now()
+        jour  = JOURS_FR[now.weekday()]
+        date  = f"{jour} {now.day} {MOIS_FR[now.month]} {now.year}"
 
-        ctk.CTkLabel(date_card,
-                     text=heure,
-                     font=ctk.CTkFont(size=42, weight="bold"),
-                     text_color=C["purple"]).pack(pady=(0, 16))
+        self.date_lbl = QLabel(date)
+        self.date_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.date_lbl.setStyleSheet(f"color: {COLORS['muted']}; font-size: 16px; background: transparent; border: none;")
+        card_l.addWidget(self.date_lbl)
+
+        self.time_lbl = QLabel(now.strftime("%H:%M"))
+        self.time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time_lbl.setStyleSheet(f"color: {COLORS['purple']}; font-size: 48px; font-weight: bold; background: transparent; border: none;")
+        card_l.addWidget(self.time_lbl)
+
+        center_l.addWidget(card)
+        center_l.addSpacing(24)
 
         # Tip
-        ctk.CTkLabel(center,
-                     text="👉  Utilise l'onglet Recherche pour trouver le bon technicien",
-                     font=ctk.CTkFont(size=14),
-                     text_color=C["text_dim"]).pack()
+        tip = QLabel("👉  Utilise l'onglet Recherche pour trouver le bon technicien")
+        tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tip.setStyleSheet(f"color: {COLORS['dim']}; font-size: 14px; background: transparent;")
+        center_l.addWidget(tip)
+
+        layout.addWidget(center)
+
+    def _update_time(self):
+        now  = datetime.now()
+        jour = JOURS_FR[now.weekday()]
+        self.date_lbl.setText(f"{jour} {now.day} {MOIS_FR[now.month]} {now.year}")
+        self.time_lbl.setText(now.strftime("%H:%M"))
 
     def refresh(self):
-        """Refresh clock on tab switch."""
-        for w in self.winfo_children():
-            w.destroy()
-        self._build()
+        self._update_time()

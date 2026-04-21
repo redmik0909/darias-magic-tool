@@ -1,33 +1,35 @@
 """
-cal_widget.py — Widget calendrier Google partagé
-Utilisé par recherche.py et calendrier.py
+cal_widget.py — Widget calendrier Google partagé (PyQt6)
 """
-import customtkinter as ctk
-import threading
 import calendar
+import threading
 from datetime import datetime
-from config import C, label, btn
-from google_cal import get_events_for_month, find_calendar_by_name, format_time
 
-MOIS_FR  = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
-            "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
-JOURS_FR = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"]
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QPushButton, QScrollArea, QGridLayout, QDialog,
+    QScrollArea, QSizePolicy
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor
+
+from config import COLORS, MOIS_FR, JOURS_FR, styled_btn
+from google_cal import get_events_for_month, find_calendar_by_name, format_time
 
 SKIP_KEYWORDS  = ["PAS DE RDV", "INDISPONIBLE", "CONGE", "CONGÉ", "FÉRIÉ", "FERIE", "EVITER", "AVOID"]
 BLOCK_KEYWORDS = ["PAS DE RDV", "INDISPONIBLE", "CONGE", "CONGÉ", "FÉRIÉ", "FERIE"]
 AVOID_KEYWORDS = ["EVITER", "AVOID"]
 
+
 def is_real_rdv(e):
     if any(x in e.get("summary", "").upper() for x in SKIP_KEYWORDS):
         return False
-    # Must have a location OR contain "|" in summary (Ville | Nom format)
-    has_location = bool(e.get("location", "").strip())
-    has_pipe     = "|" in e.get("summary", "")
-    return has_location or has_pipe
+    return bool(e.get("location", "").strip()) or "|" in e.get("summary", "")
 
 def is_blocked_day(events):
-    return any(any(x in e.get("summary", "").upper() for x in BLOCK_KEYWORDS) for e in events) \
-           and not any(is_real_rdv(e) for e in events)
+    has_block = any(any(x in e.get("summary", "").upper() for x in BLOCK_KEYWORDS) for e in events)
+    has_rdv   = any(is_real_rdv(e) for e in events)
+    return has_block and not has_rdv
 
 def get_avoided_slots(events):
     avoided = set()
@@ -39,7 +41,6 @@ def get_avoided_slots(events):
     return avoided
 
 def find_cal_id(rep):
-    """Find Google Calendar ID for a rep."""
     keywords = [rep["nom"].split()[0]]
     if len(rep["nom"].split()) > 1:
         keywords.append(rep["nom"].split()[1])
@@ -54,19 +55,134 @@ def find_cal_id(rep):
             return cal_id
     return None
 
-class GoogleCalWidget(ctk.CTkFrame):
-    """
-    Standalone Google Calendar widget.
-    Shows month grid or list view with real Google Calendar data.
-    
-    Usage:
-        widget = GoogleCalWidget(parent, rep, on_day_click=callback)
-        widget.pack(fill="both", expand=True)
-        widget.load(cal_id)
-    """
-    def __init__(self, parent, rep, on_day_click=None, max_rdv=5):
-        super().__init__(parent, fg_color=C["surface"], corner_radius=8,
-                        border_width=1, border_color=C["border"])
+
+# ── Fetch thread ───────────────────────────────────────────────────────────────
+class CalFetchThread(QThread):
+    done = pyqtSignal(dict)
+
+    def __init__(self, cal_id, year, month):
+        super().__init__()
+        self.cal_id = cal_id
+        self.year   = year
+        self.month  = month
+
+    def run(self):
+        try:
+            events = get_events_for_month(self.cal_id, self.year, self.month)
+            self.done.emit(events)
+        except Exception:
+            self.done.emit({})
+
+
+# ── Day popup ──────────────────────────────────────────────────────────────────
+def show_day_popup(parent, rep, date_key, events):
+    day_parts = date_key.split("-")
+    day_fmt   = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]} {day_parts[0]}"
+    real_rdv  = [e for e in events if is_real_rdv(e)]
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(f"RDV - {day_fmt}")
+    dlg.setMinimumSize(500, 400)
+    dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+    layout = QVBoxLayout(dlg)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+
+    # Header
+    hdr = QFrame()
+    hdr.setStyleSheet(f"background-color: {COLORS['sidebar']}; border: none;")
+    hdr.setFixedHeight(52)
+    hdr_l = QHBoxLayout(hdr)
+    hdr_l.setContentsMargins(12, 0, 12, 0)
+
+    hdr_title = QLabel(f"  {day_fmt} - {rep['nom']}")
+    hdr_title.setStyleSheet("color: white; font-size: 14px; font-weight: bold; background: transparent;")
+    hdr_l.addWidget(hdr_title)
+    hdr_l.addStretch()
+
+    count_lbl = QLabel(f"{len(real_rdv)} RDV")
+    count_lbl.setStyleSheet("color: #93c5fd; font-size: 12px; background: transparent;")
+    hdr_l.addWidget(count_lbl)
+    layout.addWidget(hdr)
+
+    # Content
+    if not real_rdv:
+        empty = QLabel("Aucun RDV ce jour — journée libre!")
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setStyleSheet(f"color: {COLORS['green']}; font-size: 13px; padding: 40px;")
+        layout.addWidget(empty)
+    else:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        content = QWidget()
+        content.setStyleSheet(f"background-color: {COLORS['bg']};")
+        content_l = QVBoxLayout(content)
+        content_l.setContentsMargins(12, 12, 12, 12)
+        content_l.setSpacing(8)
+
+        for e in real_rdv:
+            card = QFrame()
+            card.setStyleSheet(f"background-color: {COLORS['surface2']}; border-radius: 6px;")
+            card_l = QVBoxLayout(card)
+            card_l.setContentsMargins(12, 8, 12, 8)
+            card_l.setSpacing(4)
+
+            time_str = format_time(e["start"])
+            top_row  = QHBoxLayout()
+
+            time_lbl = QLabel(f" {time_str} ")
+            time_lbl.setStyleSheet(f"""
+                background-color: {COLORS['accent']};
+                color: white;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 2px 6px;
+            """)
+            time_lbl.setFixedHeight(24)
+            top_row.addWidget(time_lbl)
+
+            name_lbl = QLabel(e.get("summary", "Sans titre"))
+            name_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 12px; font-weight: bold; background: transparent;")
+            name_lbl.setWordWrap(True)
+            top_row.addWidget(name_lbl)
+            top_row.addStretch()
+            card_l.addLayout(top_row)
+
+            if e.get("location"):
+                loc_lbl = QLabel(f"📍 {e['location']}")
+                loc_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+                loc_lbl.setWordWrap(True)
+                card_l.addWidget(loc_lbl)
+
+            content_l.addWidget(card)
+
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+    # Close button
+    close_btn = styled_btn("Fermer", COLORS["surface2"], COLORS["text_muted"], height=34, width=120)
+    close_btn.setStyleSheet(close_btn.styleSheet() + f"border: 1px solid {COLORS['border']};")
+    close_btn.clicked.connect(dlg.accept)
+    btn_row = QHBoxLayout()
+    btn_row.addStretch()
+    btn_row.addWidget(close_btn)
+    btn_row.addStretch()
+
+    btn_widget = QWidget()
+    btn_widget.setStyleSheet(f"background-color: {COLORS['bg']}; border: none;")
+    btn_widget.setLayout(btn_row)
+    btn_widget.setFixedHeight(52)
+    layout.addWidget(btn_widget)
+
+    dlg.exec()
+
+
+# ── Google Calendar Widget ─────────────────────────────────────────────────────
+class GoogleCalWidget(QWidget):
+    def __init__(self, parent=None, rep=None, on_day_click=None, max_rdv=5):
+        super().__init__(parent)
         self.rep          = rep
         self.on_day_click = on_day_click
         self.max_rdv      = max_rdv
@@ -75,92 +191,175 @@ class GoogleCalWidget(ctk.CTkFrame):
         self.month_events = {}
         self.selected     = None
         self.view_mode    = "calendar"
-        # Dynamic sizing based on screen width
-        sw = parent.winfo_screenwidth()
-        self._scale      = max(0.75, min(1.0, sw / 1920))  # 0.75 at 1366, 1.0 at 1920+
-        self._cell_wrap  = max(60, int((sw - 200) * 0.6 / 7 - 20))
-        self._fs         = lambda s: max(7, int(s * self._scale))  # scaled font size
-        self._build_skeleton()
+        self.fetch_thread = None
+        self.setStyleSheet(f"""
+            QWidget {{ background-color: {COLORS['surface']}; }}
+            QLabel {{ border: none; background: transparent; color: {COLORS['text']}; }}
+            QFrame {{ border: none; background: transparent; }}
+        """)
+        self._build()
 
-    def _build_skeleton(self):
+    def _build(self):
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+
         # Header
-        self.hdr = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
-        self.hdr.pack(fill="x")
+        hdr = QFrame()
+        hdr.setStyleSheet(f"background-color: {COLORS['surface']}; border-bottom: 1px solid {COLORS['border']};")
+        hdr.setFixedHeight(50)
+        hdr_l = QHBoxLayout(hdr)
+        hdr_l.setContentsMargins(16, 0, 12, 0)
 
-        label(self.hdr, f"Calendrier — {self.rep['nom']}",
-              size=13, weight="bold").pack(side="left", padx=16, pady=12)
+        title = QLabel(f"Calendrier — {self.rep['nom']}" if self.rep else "Calendrier")
+        title.setStyleSheet(f"color: {COLORS['text']}; font-size: 13px; font-weight: bold; background: transparent;")
+        hdr_l.addWidget(title)
+        hdr_l.addStretch()
 
-        nav = ctk.CTkFrame(self.hdr, fg_color="transparent")
-        nav.pack(side="right", padx=12)
-        btn(nav, "<", self._prev, width=32, height=28,
-            color=C["accent"], hover=C["accent_h"]).pack(side="left", padx=2)
-        self.nav_lbl = label(nav, "", size=12, weight="bold", color=C["text"])
-        self.nav_lbl.pack(side="left", padx=8)
-        btn(nav, ">", self._next, width=32, height=28,
-            color=C["accent"], hover=C["accent_h"]).pack(side="left", padx=2)
+        # Nav buttons
+        self.prev_btn = QPushButton("<")
+        self.prev_btn.setFixedSize(32, 28)
+        self.prev_btn.setStyleSheet(self._nav_btn_style())
+        self.prev_btn.clicked.connect(lambda: self._change_month(-1))
+        hdr_l.addWidget(self.prev_btn)
 
-        # Toggle
-        toggle = ctk.CTkFrame(self, fg_color=C["surface2"], corner_radius=0)
-        toggle.pack(fill="x", padx=8, pady=(4, 0))
-        self.btn_cal = ctk.CTkButton(toggle, text="📅  Calendrier",
-            width=130, height=30, corner_radius=6,
-            fg_color=C["accent"], hover_color=C["accent_h"],
-            text_color="white", font=ctk.CTkFont(size=11, weight="bold"),
-            command=self._to_calendar)
-        self.btn_cal.pack(side="left", padx=6, pady=6)
-        self.btn_lst = ctk.CTkButton(toggle, text="☰  Liste",
-            width=100, height=30, corner_radius=6,
-            fg_color=C["surface"], hover_color=C["accent_h"],
-            text_color=C["text_muted"], font=ctk.CTkFont(size=11, weight="bold"),
-            command=self._to_list)
-        self.btn_lst.pack(side="left", padx=2, pady=6)
+        self.nav_lbl = QLabel("")
+        self.nav_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 12px; font-weight: bold; background: transparent; min-width: 140px;")
+        self.nav_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hdr_l.addWidget(self.nav_lbl)
+
+        self.next_btn = QPushButton(">")
+        self.next_btn.setFixedSize(32, 28)
+        self.next_btn.setStyleSheet(self._nav_btn_style())
+        self.next_btn.clicked.connect(lambda: self._change_month(1))
+        hdr_l.addWidget(self.next_btn)
+
+        self.main_layout.addWidget(hdr)
+
+        # Toggle bar
+        toggle = QFrame()
+        toggle.setStyleSheet(f"background-color: {COLORS['surface2']}; border-bottom: 1px solid {COLORS['border']};")
+        toggle.setFixedHeight(46)
+        toggle_l = QHBoxLayout(toggle)
+        toggle_l.setContentsMargins(8, 6, 8, 6)
+        toggle_l.setSpacing(4)
+
+        self.btn_cal = QPushButton("📅  Calendrier")
+        self.btn_cal.setFixedSize(130, 30)
+        self.btn_cal.setStyleSheet(self._toggle_style(True))
+        self.btn_cal.clicked.connect(self._to_calendar)
+
+        self.btn_lst = QPushButton("☰  Liste")
+        self.btn_lst.setFixedSize(100, 30)
+        self.btn_lst.setStyleSheet(self._toggle_style(False))
+        self.btn_lst.clicked.connect(self._to_list)
+
+        toggle_l.addWidget(self.btn_cal)
+        toggle_l.addWidget(self.btn_lst)
+        toggle_l.addStretch()
+        self.main_layout.addWidget(toggle)
 
         # Content area
-        self.content = ctk.CTkFrame(self, fg_color="transparent")
-        self.content.pack(fill="both", expand=True)
+        self.content = QWidget()
+        self.content.setStyleSheet("background: transparent;")
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
 
-        label(self.content, "Chargement du calendrier...",
-              size=12, color=C["text_dim"]).pack(expand=True)
+        loading = QLabel("Chargement du calendrier...")
+        loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 12px;")
+        self.content_layout.addWidget(loading)
+
+        self.main_layout.addWidget(self.content)
+        self._update_nav()
+
+    def _nav_btn_style(self):
+        return f"""
+            QPushButton {{
+                background-color: {COLORS['accent']};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{ background-color: {COLORS['accent_h']}; }}
+        """
+
+    def _toggle_style(self, active):
+        if active:
+            return f"""
+                QPushButton {{
+                    background-color: {COLORS['accent']};
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }}
+            """
+        return f"""
+            QPushButton {{
+                background-color: {COLORS['surface']};
+                color: {COLORS['text_muted']};
+                border: none;
+                border-radius: 6px;
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {COLORS['border']}; }}
+        """
 
     def load(self, cal_id):
-        """Load calendar data for given cal_id."""
+        # Always call from main thread via QTimer
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._load_safe(cal_id))
+
+    def _load_safe(self, cal_id):
         self.cal_id = cal_id
         self._update_nav()
-        threading.Thread(target=self._fetch, daemon=True).start()
+        self._fetch()
 
     def _fetch(self):
-        try:
-            y, m = self.cal_date.year, self.cal_date.month
-            self.month_events = get_events_for_month(self.cal_id, y, m)
-            self.after(0, self._render)
-        except Exception:
-            self.after(0, self._render)
+        if not self.cal_id:
+            return
+        self._show_loading()
+        self.fetch_thread = CalFetchThread(self.cal_id, self.cal_date.year, self.cal_date.month)
+        self.fetch_thread.done.connect(self._on_fetched)
+        self.fetch_thread.start()
+
+    def _on_fetched(self, events):
+        self.month_events = events
+        self._render()
+
+    def _show_loading(self):
+        self._clear_content()
+        loading = QLabel("Chargement...")
+        loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 12px;")
+        self.content_layout.addWidget(loading)
 
     def _update_nav(self):
         y, m = self.cal_date.year, self.cal_date.month
-        self.nav_lbl.configure(text=f"{MOIS_FR[m]} {y}")
+        self.nav_lbl.setText(f"{MOIS_FR[m]} {y}")
 
     def _clear_content(self):
-        for w in self.content.winfo_children():
-            w.destroy()
+        while self.content_layout.count():
+            item = self.content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
     def _to_calendar(self):
         self.view_mode = "calendar"
-        self.btn_cal.configure(fg_color=C["accent"], text_color="white")
-        self.btn_lst.configure(fg_color=C["surface"], text_color=C["text_muted"])
+        self.btn_cal.setStyleSheet(self._toggle_style(True))
+        self.btn_lst.setStyleSheet(self._toggle_style(False))
         self._render()
 
     def _to_list(self):
         self.view_mode = "list"
-        self.btn_cal.configure(fg_color=C["surface"], text_color=C["text_muted"])
-        self.btn_lst.configure(fg_color=C["accent"], text_color="white")
+        self.btn_cal.setStyleSheet(self._toggle_style(False))
+        self.btn_lst.setStyleSheet(self._toggle_style(True))
         self._render()
-
-    def _prev(self):
-        self._change_month(-1)
-
-    def _next(self):
-        self._change_month(1)
 
     def _change_month(self, delta):
         m, y = self.cal_date.month + delta, self.cal_date.year
@@ -169,9 +368,10 @@ class GoogleCalWidget(ctk.CTkFrame):
         self.cal_date     = self.cal_date.replace(year=y, month=m, day=1)
         self.month_events = {}
         self._update_nav()
-        self._render()
         if self.cal_id:
-            threading.Thread(target=self._fetch, daemon=True).start()
+            self._fetch()
+        else:
+            self._render()
 
     def _render(self):
         self._clear_content()
@@ -180,32 +380,41 @@ class GoogleCalWidget(ctk.CTkFrame):
         else:
             self._render_list()
 
-    # ── Grid view ─────────────────────────────────────────────────────────────
+    # ── Grid view ──────────────────────────────────────────────────────────────
     def _render_grid(self):
         y, m  = self.cal_date.year, self.cal_date.month
         today = datetime.today()
         _, days_in_month = calendar.monthrange(y, m)
+        first_col = (datetime(y, m, 1).weekday() + 1) % 7
 
         # Day headers
-        hdr = ctk.CTkFrame(self.content, fg_color=C["surface2"], corner_radius=0)
-        hdr.pack(fill="x", padx=4)
-        hdr.columnconfigure(list(range(7)), weight=1)
-        for i, j in enumerate(JOURS_FR):
-            label(hdr, j, size=self._fs(10), weight="bold",
-                  color=C["text_muted"]).grid(row=0, column=i, padx=2, pady=5, sticky="nsew")
+        hdr_widget = QWidget()
+        hdr_widget.setStyleSheet(f"background-color: {COLORS['surface2']};")
+        hdr_layout = QHBoxLayout(hdr_widget)
+        hdr_layout.setContentsMargins(4, 4, 4, 4)
+        hdr_layout.setSpacing(2)
+        for j in JOURS_FR:
+            lbl = QLabel(j)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: bold; background: transparent;")
+            hdr_layout.addWidget(lbl)
+        self.content_layout.addWidget(hdr_widget)
 
-        # Use a plain frame with grid — scales perfectly
-        grid = ctk.CTkFrame(self.content, fg_color="transparent")
-        grid.pack(fill="both", expand=True, padx=4, pady=4)
-        for i in range(7):
-            grid.columnconfigure(i, weight=1)
+        # Grid
+        grid_widget = QWidget()
+        grid_widget.setStyleSheet("background: transparent;")
+        grid_layout = QGridLayout(grid_widget)
+        grid_layout.setContentsMargins(4, 4, 4, 4)
+        grid_layout.setSpacing(2)
 
-        first_col = (datetime(y, m, 1).weekday() + 1) % 7
-        row, col  = 0, first_col
-        num_rows  = ((days_in_month + first_col - 1) // 7) + 1
-        last_row  = num_rows - 1
+        num_rows = ((days_in_month + first_col - 1) // 7) + 1
+        for c in range(7):
+            grid_layout.setColumnStretch(c, 1)
         for r in range(num_rows):
-            grid.rowconfigure(r, weight=1 if r < last_row else 0, minsize=100)
+            grid_layout.setRowStretch(r, 1 if r < num_rows - 1 else 0)
+            grid_layout.setRowMinimumHeight(r, 100)
+
+        row, col = 0, first_col
 
         for day in range(1, days_in_month + 1):
             date_key   = f"{y}-{m:02d}-{day:02d}"
@@ -219,31 +428,41 @@ class GoogleCalWidget(ctk.CTkFrame):
             is_full    = len(rdv_list) >= self.max_rdv
 
             if is_sel:
-                bg, bc, bw = "#dbeafe", C["accent"], 2
+                bg, border = "#dbeafe", COLORS["accent"]
             elif is_today:
-                bg, bc, bw = "#f0f9ff", C["accent"], 2
+                bg, border = "#f0f9ff", COLORS["accent"]
             elif is_past:
-                bg, bc, bw = "#f1f5f9", C["border"], 1
+                bg, border = "#f1f5f9", COLORS["border"]
             elif blocked:
-                bg, bc, bw = "#e2e8f0", "#94a3b8", 1
+                bg, border = "#e2e8f0", "#94a3b8"
             elif is_full:
-                bg, bc, bw = "#fef2f2", C["red"], 1
+                bg, border = "#fef2f2", COLORS["red"]
             else:
-                bg, bc, bw = C["surface"], C["border"], 1
+                bg, border = COLORS["surface"], COLORS["border"]
 
-            cell = ctk.CTkFrame(grid, fg_color=bg, corner_radius=6,
-                                border_width=bw, border_color=bc)
-            cell.grid(row=row, column=col, padx=2, pady=2, sticky="nsew")
+            cell = QFrame()
+            cell.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {bg};
+                    border: 1px solid {border};
+                    border-radius: 6px;
+                }}
+            """)
+            cell_l = QVBoxLayout(cell)
+            cell_l.setContentsMargins(4, 3, 4, 3)
+            cell_l.setSpacing(1)
 
-            label(cell, str(day), size=self._fs(11), weight="bold",
-                  color=C["accent"] if (is_today or is_sel) else
-                  (C["text_dim"] if is_past else C["text"])
-                  ).pack(anchor="nw", padx=4, pady=(3, 1))
+            # Day number
+            day_color = COLORS["accent"] if (is_today or is_sel) else (COLORS["text_dim"] if is_past else COLORS["text"])
+            day_lbl   = QLabel(str(day))
+            day_lbl.setStyleSheet(f"color: {day_color}; font-size: 11px; font-weight: bold; background: transparent;")
+            cell_l.addWidget(day_lbl)
 
             if blocked and not is_past:
-                ctk.CTkLabel(cell, text="🚫",
-                             font=ctk.CTkFont(size=9),
-                             text_color="#94a3b8").pack()
+                blocked_lbl = QLabel("🚫")
+                blocked_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                blocked_lbl.setStyleSheet("background: transparent; font-size: 9px;")
+                cell_l.addWidget(blocked_lbl)
             elif rdv_list and not is_past:
                 for rdv in rdv_list[:2]:
                     start_h = format_time(rdv.get("start", ""))
@@ -252,68 +471,78 @@ class GoogleCalWidget(ctk.CTkFrame):
                     loc     = rdv.get("location", "")
                     addr_s  = loc.split(",")[0][:14] if loc else ""
 
-                    chip = ctk.CTkFrame(cell, fg_color="#ffffff", corner_radius=3,
-                                        border_width=1,
-                                        border_color=C["red"] if is_full else C["green"])
-                    chip.pack(fill="x", padx=3, pady=1)
-
-                    top_c = ctk.CTkFrame(chip, fg_color="transparent")
-                    top_c.pack(fill="x", padx=3, pady=(2, 0))
+                    chip_color = COLORS["red"] if is_full else COLORS["green"]
+                    chip = QFrame()
+                    chip.setStyleSheet(f"background-color: white; border: 1px solid {chip_color}; border-radius: 3px;")
+                    chip_l = QVBoxLayout(chip)
+                    chip_l.setContentsMargins(3, 2, 3, 2)
+                    chip_l.setSpacing(1)
 
                     if start_h:
-                        ctk.CTkLabel(top_c, text=start_h,
-                                     font=ctk.CTkFont(size=self._fs(8), weight="bold"),
-                                     fg_color=C["red"] if is_full else C["green"],
-                                     text_color="white",
-                                     corner_radius=2).pack(side="left", padx=(0, 3))
+                        time_lbl = QLabel(start_h)
+                        time_lbl.setStyleSheet(f"""
+                            background-color: {chip_color};
+                            color: white;
+                            font-size: 8px;
+                            font-weight: bold;
+                            border-radius: 2px;
+                            padding: 1px 3px;
+                        """)
+                        time_lbl.setFixedHeight(16)
+                        chip_l.addWidget(time_lbl)
 
-                    ctk.CTkLabel(chip, text=name_s,
-                                 font=ctk.CTkFont(size=self._fs(10), weight="bold"),
-                                 text_color="#1e293b",
-                                 wraplength=self._cell_wrap, justify="left",
-                                 anchor="w").pack(anchor="w", padx=3, pady=(1, 0))
+                    name_lbl = QLabel(name_s)
+                    name_lbl.setWordWrap(True)
+                    name_lbl.setStyleSheet("color: #1e293b; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+                    chip_l.addWidget(name_lbl)
 
                     if addr_s:
-                        ctk.CTkLabel(chip, text=f"📍 {addr_s}",
-                                     font=ctk.CTkFont(size=self._fs(9)),
-                                     text_color="#64748b",
-                                     anchor="w").pack(anchor="w", padx=3, pady=(0, 2))
+                        addr_lbl = QLabel(f"📍 {addr_s}")
+                        addr_lbl.setStyleSheet("color: #64748b; font-size: 8px; background: transparent; border: none;")
+                        chip_l.addWidget(addr_lbl)
+
+                    cell_l.addWidget(chip)
 
                 if len(rdv_list) > 2:
-                    ctk.CTkLabel(cell, text=f"+ {len(rdv_list)-2}",
-                                 font=ctk.CTkFont(size=self._fs(8)),
-                                 text_color=C["text_muted"]).pack(anchor="w", padx=4)
+                    more = QLabel(f"+ {len(rdv_list)-2}")
+                    more.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 8px; background: transparent;")
+                    cell_l.addWidget(more)
+
             elif not is_past and not blocked:
-                ctk.CTkLabel(cell, text="Libre",
-                             font=ctk.CTkFont(size=self._fs(8)),
-                             text_color=C["text_dim"]).pack(padx=3, pady=1)
+                free_lbl = QLabel("Libre")
+                free_lbl.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 8px; background: transparent;")
+                cell_l.addWidget(free_lbl)
+
+            cell_l.addStretch()
 
             if not is_past:
-                def _click(e, dk=date_key): self._on_click(dk)
-                cell.bind("<Button-1>", _click)
-                for child in cell.winfo_children():
-                    child.bind("<Button-1>", _click)
-                    for gc in child.winfo_children():
-                        gc.bind("<Button-1>", _click)
+                cell.mousePressEvent = lambda e, dk=date_key: self._on_click(dk)
+                cell.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            grid_layout.addWidget(cell, row, col)
 
             col += 1
             if col == 7:
                 col = 0
                 row += 1
 
-    # ── List view ─────────────────────────────────────────────────────────────
+        self.content_layout.addWidget(grid_widget, stretch=1)
+
+    # ── List view ──────────────────────────────────────────────────────────────
     def _render_list(self):
         y, m  = self.cal_date.year, self.cal_date.month
         today = datetime.today()
         _, days_in_month = calendar.monthrange(y, m)
 
-        scroll = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
-        scroll.pack(fill="both", expand=True, padx=8, pady=8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        scroll.bind("<Enter>", lambda e: scroll._parent_canvas.bind_all(
-            "<MouseWheel>", lambda ev: scroll._parent_canvas.yview_scroll(
-                int(-1*(ev.delta/120)), "units")))
-        scroll.bind("<Leave>", lambda e: scroll._parent_canvas.unbind_all("<MouseWheel>"))
+        content = QWidget()
+        content.setStyleSheet(f"background-color: {COLORS['bg']};")
+        content_l = QVBoxLayout(content)
+        content_l.setContentsMargins(8, 8, 8, 8)
+        content_l.setSpacing(6)
 
         for day in range(1, days_in_month + 1):
             date_key   = f"{y}-{m:02d}-{day:02d}"
@@ -331,39 +560,47 @@ class GoogleCalWidget(ctk.CTkFrame):
                 continue
 
             if is_sel:
-                bg, bc, bw = "#dbeafe", C["accent"], 2
+                bg, border, bw = "#dbeafe", COLORS["accent"], "2px"
             elif is_today:
-                bg, bc, bw = "#f0f9ff", C["accent"], 2
+                bg, border, bw = "#f0f9ff", COLORS["accent"], "2px"
             elif is_full:
-                bg, bc, bw = "#fef2f2", C["red"], 1
+                bg, border, bw = "#fef2f2", COLORS["red"], "1px"
             else:
-                bg, bc, bw = C["surface"], C["border"], 1
+                bg, border, bw = COLORS["surface"], COLORS["border"], "1px"
 
-            card = ctk.CTkFrame(scroll, fg_color=bg, corner_radius=10,
-                                border_width=bw, border_color=bc)
-            card.pack(fill="x", pady=4)
+            card = QFrame()
+            card.setStyleSheet(f"background-color: {bg}; border: {bw} solid {border}; border-radius: 10px;")
+            card_l = QVBoxLayout(card)
+            card_l.setContentsMargins(14, 10, 14, 10)
+            card_l.setSpacing(6)
 
-            day_hdr = ctk.CTkFrame(card, fg_color="transparent")
-            day_hdr.pack(fill="x", padx=14, pady=(10, 6))
-
-            jour_nom = JOURS_FR[sun_wd]
-            ctk.CTkLabel(day_hdr,
-                         text=f"{jour_nom}  {day} {MOIS_FR[m]}",
-                         font=ctk.CTkFont(size=14, weight="bold"),
-                         text_color=C["accent"] if (is_today or is_sel) else C["text"]
-                         ).pack(side="left")
+            # Day header
+            day_hdr = QHBoxLayout()
+            jour_nom  = JOURS_FR[sun_wd]
+            day_color = COLORS["accent"] if (is_today or is_sel) else COLORS["text"]
+            day_title = QLabel(f"{jour_nom}  {day} {MOIS_FR[m]}")
+            day_title.setStyleSheet(f"color: {day_color}; font-size: 14px; font-weight: bold; background: transparent;")
+            day_hdr.addWidget(day_title)
+            day_hdr.addStretch()
 
             if is_full:
-                badge_fg, badge_txt = C["red"], f"Complet · {len(rdv_list)} RDV"
+                badge_bg, badge_txt = COLORS["red"], f"Complet · {len(rdv_list)} RDV"
             elif rdv_list:
-                badge_fg, badge_txt = C["green"], f"{len(rdv_list)} RDV"
+                badge_bg, badge_txt = COLORS["green"], f"{len(rdv_list)} RDV"
             else:
-                badge_fg, badge_txt = "#94a3b8", "Libre"
+                badge_bg, badge_txt = "#94a3b8", "Libre"
 
-            ctk.CTkLabel(day_hdr, text=f"  {badge_txt}  ",
-                         font=ctk.CTkFont(size=11, weight="bold"),
-                         fg_color=badge_fg, text_color="white",
-                         corner_radius=6).pack(side="right")
+            badge = QLabel(f"  {badge_txt}  ")
+            badge.setStyleSheet(f"""
+                background-color: {badge_bg};
+                color: white;
+                font-size: 11px;
+                font-weight: bold;
+                border-radius: 6px;
+                padding: 3px 6px;
+            """)
+            day_hdr.addWidget(badge)
+            card_l.addLayout(day_hdr)
 
             for rdv in rdv_list:
                 start_h = format_time(rdv.get("start", ""))
@@ -371,92 +608,51 @@ class GoogleCalWidget(ctk.CTkFrame):
                 loc     = rdv.get("location", "")
                 name_s  = summary.split("|")[1].strip() if "|" in summary else summary.strip()
 
-                row = ctk.CTkFrame(card, fg_color=C["surface2"], corner_radius=6)
-                row.pack(fill="x", padx=10, pady=2)
-                inner = ctk.CTkFrame(row, fg_color="transparent")
-                inner.pack(fill="x", padx=10, pady=8)
-                top_row = ctk.CTkFrame(inner, fg_color="transparent")
-                top_row.pack(fill="x")
+                rdv_frame = QFrame()
+                rdv_frame.setStyleSheet(f"background-color: {COLORS['surface2']}; border: none; border-radius: 6px;")
+                rdv_l = QVBoxLayout(rdv_frame)
+                rdv_l.setContentsMargins(10, 8, 10, 8)
+                rdv_l.setSpacing(4)
+
+                top_row = QHBoxLayout()
+                top_row.setSpacing(8)
 
                 if start_h:
-                    ctk.CTkLabel(top_row, text=f" {start_h} ",
-                                 font=ctk.CTkFont(size=11, weight="bold"),
-                                 fg_color=C["accent"], text_color="white",
-                                 corner_radius=4).pack(side="left", padx=(0, 10))
+                    time_lbl = QLabel(f" {start_h} ")
+                    time_lbl.setStyleSheet(f"""
+                        background-color: {COLORS['accent']};
+                        color: white;
+                        font-size: 11px;
+                        font-weight: bold;
+                        border-radius: 4px;
+                        padding: 2px 6px;
+                    """)
+                    time_lbl.setFixedHeight(24)
+                    top_row.addWidget(time_lbl)
 
-                ctk.CTkLabel(top_row, text=name_s,
-                             font=ctk.CTkFont(size=13, weight="bold"),
-                             text_color=C["text"], anchor="w").pack(side="left")
+                name_lbl = QLabel(name_s)
+                name_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 13px; font-weight: bold; background: transparent;")
+                name_lbl.setWordWrap(True)
+                top_row.addWidget(name_lbl)
+                top_row.addStretch()
+                rdv_l.addLayout(top_row)
 
                 if loc:
                     addr_short = ", ".join(loc.split(",")[:2])[:50]
-                    ctk.CTkLabel(inner, text=f"📍 {addr_short}",
-                                 font=ctk.CTkFont(size=11),
-                                 text_color=C["text_muted"],
-                                 anchor="w").pack(anchor="w", pady=(4, 0))
+                    addr_lbl = QLabel(f"📍 {addr_short}")
+                    addr_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+                    addr_lbl.setWordWrap(True)
+                    rdv_l.addWidget(addr_lbl)
 
-            ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
+                card_l.addWidget(rdv_frame)
 
-            def _click(e, dk=date_key): self._on_click(dk)
-            card.bind("<Button-1>", _click)
-            for w in card.winfo_children():
-                w.bind("<Button-1>", _click)
-                for ww in w.winfo_children():
-                    ww.bind("<Button-1>", _click)
+            card.mousePressEvent = lambda e, dk=date_key: self._on_click(dk)
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            content_l.addWidget(card)
 
-def show_day_popup(parent, rep, date_key, events):
-    """Shared popup — shows RDV details for a given day."""
-    from config import C, label, btn
-    day_parts = date_key.split("-")
-    day_fmt   = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]} {day_parts[0]}"
-    real_rdv  = [e for e in events if is_real_rdv(e)]
-
-    import customtkinter as ctk
-    popup = ctk.CTkToplevel(parent)
-    popup.title(f"RDV - {day_fmt}")
-    popup.geometry("500x420")
-    popup.configure(fg_color=C["bg"])
-    popup.attributes("-topmost", True)
-    popup.lift()
-    popup.focus_force()
-
-    hdr = ctk.CTkFrame(popup, fg_color="#1e3a5f", corner_radius=0)
-    hdr.pack(fill="x")
-    label(hdr, f"  {day_fmt} - {rep['nom']}",
-          size=14, weight="bold", color="#ffffff").pack(side="left", pady=12, padx=8)
-    label(hdr, f"{len(real_rdv)} RDV  ",
-          size=12, color="#93c5fd").pack(side="right", padx=8)
-
-    if not real_rdv:
-        label(popup, "Aucun RDV ce jour - journee libre!",
-              size=13, color=C["green"]).pack(expand=True)
-    else:
-        scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
-        scroll.pack(fill="both", expand=True, padx=12, pady=12)
-        for e in real_rdv:
-            card = ctk.CTkFrame(scroll, fg_color=C["surface2"], corner_radius=6,
-                                border_width=1, border_color=C["border"])
-            card.pack(fill="x", pady=4)
-            time_str = format_time(e["start"])
-            top_r    = ctk.CTkFrame(card, fg_color="transparent")
-            top_r.pack(fill="x", padx=12, pady=(8, 2))
-            ctk.CTkLabel(top_r, text=f" {time_str} ",
-                         font=ctk.CTkFont(size=11, weight="bold"),
-                         fg_color=C["accent"], text_color="white",
-                         corner_radius=4).pack(side="left", padx=(0, 8))
-            label(top_r, e.get("summary", "Sans titre"), size=12,
-                  weight="bold").pack(side="left")
-            if e.get("location"):
-                label(card, f"   {e['location']}", size=11,
-                      color=C["text_muted"], anchor="w",
-                      wraplength=440).pack(anchor="w", padx=12, pady=(0, 8))
-            else:
-                ctk.CTkFrame(card, fg_color="transparent", height=4).pack()
-
-    btn(popup, "Fermer", popup.destroy,
-        width=120, height=34, color=C["surface2"],
-        hover=C["border"]).pack(pady=(0, 12))
-
+        content_l.addStretch()
+        scroll.setWidget(content)
+        self.content_layout.addWidget(scroll)
 
     def _on_click(self, date_key):
         self.selected = date_key

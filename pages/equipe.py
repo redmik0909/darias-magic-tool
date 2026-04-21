@@ -1,88 +1,156 @@
-import tkinter as tk
-import customtkinter as ctk
-from config import C, ZONE_COLORS, PRIORITY_LABELS, label, btn
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QPushButton, QScrollArea
+)
+from PyQt6.QtCore import Qt
+from config import COLORS, ZONE_COLORS, PRIORITY_COLORS, styled_btn
 from utils import get_all_reps
-from pages.calendrier import CalendarWindow
 
 
-class EquipePage(ctk.CTkFrame):
-    def __init__(self, parent, data):
-        super().__init__(parent, fg_color=C["bg"])
-        self.data = data
+class EquipePage(QWidget):
+    def __init__(self, data):
+        super().__init__()
+        self.data     = data
         self.all_reps = get_all_reps(data)
+        self.setStyleSheet(f"""
+            background-color: {COLORS['bg']};
+            QLabel {{ border: none; background: transparent; }}
+        """)
         self._build()
 
     def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
         # Header
-        ph = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
-        ph.pack(fill="x")
-        label(ph, "Notre Equipe", size=16, weight="bold").pack(side="left", padx=20, pady=14)
-        label(ph, f"{len(self.all_reps)} representants", size=12,
-              color=C["text_muted"]).pack(side="left", padx=8)
+        hdr = QFrame()
+        hdr.setStyleSheet(f"background-color: {COLORS['surface']}; border-bottom: 1px solid {COLORS['border']};")
+        hdr.setFixedHeight(52)
+        hdr_l = QHBoxLayout(hdr)
+        hdr_l.setContentsMargins(20, 0, 20, 0)
 
-        # Smooth canvas scroll
-        outer = ctk.CTkFrame(self, fg_color="transparent")
-        outer.pack(fill="both", expand=True, padx=24, pady=16)
+        title = QLabel("Notre Équipe")
+        title.setStyleSheet(f"color: {COLORS['text']}; font-size: 16px; font-weight: bold; border: none; background: transparent;")
+        hdr_l.addWidget(title)
 
-        self.canvas = tk.Canvas(outer, bg=C["bg"], highlightthickness=0, bd=0)
-        scrollbar = tk.Scrollbar(outer, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
+        count = QLabel(f"{len(self.all_reps)} représentants")
+        count.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; border: none; background: transparent;")
+        hdr_l.addWidget(count)
+        hdr_l.addStretch()
+        layout.addWidget(hdr)
 
-        self.inner = ctk.CTkFrame(self.canvas, fg_color="transparent")
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        # Scrollable content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        self.canvas.bind("<Configure>",
-                         lambda e: self.canvas.itemconfig(self.canvas_window, width=e.width))
-        self.inner.bind("<Configure>",
-                        lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind_all("<MouseWheel>",
-                             lambda e: self.canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        content = QWidget()
+        content.setStyleSheet(f"background-color: {COLORS['bg']};")
+        content_l = QVBoxLayout(content)
+        content_l.setContentsMargins(24, 16, 24, 16)
+        content_l.setSpacing(0)
 
-        # Populate zones
+        # Group by zone
         zones_seen = {}
         for item in self.all_reps:
-            zid  = item["zone"]["id"]
-            znom = item["zone"]["nom"]
+            zid = item["zone"]["id"]
             if zid not in zones_seen:
                 zones_seen[zid] = {
-                    "nom": znom,
-                    "couleur": ZONE_COLORS.get(zid, C["accent"]),
-                    "reps": []
+                    "nom":     item["zone"]["nom"],
+                    "couleur": ZONE_COLORS.get(zid, COLORS["accent"]),
+                    "reps":    []
                 }
             zones_seen[zid]["reps"].append(item["rep"])
 
         for zid, zinfo in zones_seen.items():
-            zh = ctk.CTkFrame(self.inner, fg_color=zinfo["couleur"], corner_radius=6)
-            zh.pack(fill="x", pady=(14, 4))
-            label(zh, f"  {zinfo['nom'].upper()}", size=12, weight="bold",
-                  color="#ffffff").pack(side="left", padx=14, pady=7)
+            # Zone header
+            zh = QFrame()
+            zh.setFixedHeight(36)
+            zh.setStyleSheet(f"background-color: {zinfo['couleur']}; border-radius: 6px;")
+            zh_l = QHBoxLayout(zh)
+            zh_l.setContentsMargins(14, 0, 14, 0)
+            zh_lbl = QLabel(f"  {zinfo['nom'].upper()}")
+            zh_lbl.setStyleSheet("color: white; font-size: 12px; font-weight: bold; background: transparent; border: none;")
+            zh_l.addWidget(zh_lbl)
+            content_l.addSpacing(14)
+            content_l.addWidget(zh)
+            content_l.addSpacing(4)
 
             for rep in zinfo["reps"]:
-                self._rep_row(rep)
+                content_l.addWidget(self._rep_row(rep))
+                content_l.addSpacing(3)
 
-    def refresh(self):
-        """Called when switching to this tab — nothing to reload since calendars are popup windows."""
-        pass
+        content_l.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
 
     def _rep_row(self, rep):
-        p_text, p_color = PRIORITY_LABELS.get(rep["priorite"], ("?", C["ov"]))
-        card = ctk.CTkFrame(self.inner, corner_radius=6, fg_color=C["surface"],
-                            border_width=1, border_color=C["border"])
-        card.pack(fill="x", pady=3)
+        card = QFrame()
+        card.setObjectName("repCard")
+        card.setStyleSheet(f"""
+            QFrame#repCard {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+            }}
+            QFrame#repCard QLabel {{ border: none; background: transparent; }}
+        """)
+        card_l = QHBoxLayout(card)
+        card_l.setContentsMargins(14, 10, 14, 10)
+        card_l.setSpacing(8)
 
-        left = ctk.CTkFrame(card, fg_color="transparent")
-        left.pack(side="left", fill="both", expand=True, padx=14, pady=10)
+        # Left info
+        left = QWidget()
+        left.setStyleSheet("background: transparent;")
+        left_l = QVBoxLayout(left)
+        left_l.setContentsMargins(0, 0, 0, 0)
+        left_l.setSpacing(3)
 
-        top_row = ctk.CTkFrame(left, fg_color="transparent")
-        top_row.pack(fill="x")
-        ctk.CTkLabel(top_row, text=f"  {p_text}  ",
-                     font=ctk.CTkFont(size=10, weight="bold"),
-                     fg_color=p_color, text_color="white",
-                     corner_radius=4).pack(side="left", padx=(0, 10))
-        label(top_row, rep["nom"], size=13, weight="bold").pack(side="left")
-        label(left, rep["jours"], size=11, color=C["text_muted"], anchor="w").pack(fill="x", pady=(2, 0))
+        # Priority badge + name
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
 
-        btn(card, "Calendrier", lambda r=rep: CalendarWindow(self, r),
-            width=110, height=34, color=C["green"], hover=C["green_h"]).pack(side="right", padx=14, pady=10)
+        prio       = rep.get("priorite", 99)
+        prio_color = PRIORITY_COLORS.get(prio, "#64748b")
+        prio_text  = f"PRIORITÉ {prio}" if prio <= 3 else "AUTRE"
+
+        badge = QLabel(f"  {prio_text}  ")
+        badge.setStyleSheet(f"""
+            background-color: {prio_color};
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+            border-radius: 4px;
+            padding: 2px 4px;
+        """)
+        badge.setFixedHeight(22)
+        top_row.addWidget(badge)
+
+        name_lbl = QLabel(rep["nom"])
+        name_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 13px; font-weight: bold; background: transparent;")
+        top_row.addWidget(name_lbl)
+        top_row.addStretch()
+        left_l.addLayout(top_row)
+
+        jours_lbl = QLabel(rep.get("jours", ""))
+        jours_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+        left_l.addWidget(jours_lbl)
+
+        card_l.addWidget(left)
+        card_l.addStretch()
+
+        # Calendar button
+        cal_btn = styled_btn("Calendrier", COLORS["green"], height=34, width=110)
+        cal_btn.clicked.connect(lambda checked, r=rep: self._open_calendar(r))
+        card_l.addWidget(cal_btn)
+
+        return card
+
+    def _open_calendar(self, rep):
+        from pages.calendrier import CalendarWindow
+        win = CalendarWindow(rep, self)
+        win.show()
+
+    def refresh(self):
+        pass

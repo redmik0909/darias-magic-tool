@@ -1,47 +1,39 @@
-import customtkinter as ctk
-from datetime import datetime
-from config import C, label, btn
-from pages.cal_widget import GoogleCalWidget, find_cal_id
+import threading
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
+from PyQt6.QtCore import Qt
+from config import COLORS
+from pages.cal_widget import GoogleCalWidget, find_cal_id, show_day_popup
 
 
-class CalendarWindow(ctk.CTkToplevel):
-    def __init__(self, parent, rep):
+class CalendarWindow(QMainWindow):
+    def __init__(self, rep, parent=None):
         super().__init__(parent)
         self.rep = rep
-        self.configure(fg_color=C["bg"])
-        self.title(f"Calendrier - {rep['nom']}")
-        # Open maximized
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        self.geometry(f"{sw}x{sh}+0+0")
-        self.after(100, lambda: self.state("zoomed"))
-        self.minsize(800, 560)
-        self.lift()
-        self.focus_force()
+        self.setWindowTitle(f"Calendrier - {rep['nom']}")
+        self.setMinimumSize(900, 600)
+        self.setStyleSheet(f"background-color: {COLORS['bg']};")
         self._build()
 
     def _build(self):
-        # Calendar widget
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(10, 10, 10, 10)
+
         max_rdv = self.rep.get("rdv_par_jour") or 5
         self.cal = GoogleCalWidget(
             self, self.rep,
             on_day_click=self._on_day_click,
             max_rdv=max_rdv
         )
-        self.cal.pack(fill="both", expand=True, padx=10, pady=10)
+        layout.addWidget(self.cal)
 
-        # Load Google Calendar
-        import threading
         threading.Thread(target=self._load, daemon=True).start()
 
     def _load(self):
         cal_id = find_cal_id(self.rep)
         if cal_id:
-            self.after(0, lambda: self.cal.load(cal_id))
-        else:
-            self.after(0, lambda: label(self.cal, "Calendrier Google non trouve",
-                                        size=12, color=C["orange"]).pack(pady=20))
+            self.cal.load(cal_id)
 
     def _on_day_click(self, date_key, events):
-        from pages.cal_widget import show_day_popup
         show_day_popup(self, self.rep, date_key, events)

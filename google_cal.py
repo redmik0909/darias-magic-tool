@@ -108,9 +108,18 @@ def get_events_for_month(calendar_id, year, month):
 
 def find_calendar_by_name(keyword):
     """Find calendar by keyword. Returns (id, name) or (None, None)."""
-    for cal in get_calendars():
-        if keyword.lower() in cal.get("summary", "").lower():
-            return cal["id"], cal["summary"]
+    for attempt in range(2):
+        try:
+            for cal in get_calendars():
+                if keyword.lower() in cal.get("summary", "").lower():
+                    return cal["id"], cal["summary"]
+            return None, None
+        except Exception as e:
+            if attempt == 0 and "SSL" in str(e):
+                global _service_cache
+                _service_cache = None
+                continue
+            return None, None
     return None, None
 
 
