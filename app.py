@@ -9,7 +9,7 @@ from pages.recherche import RecherchePage
 from pages.equipe import EquipePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.4.6"
+CURRENT_VERSION = "2.4.7"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
 
