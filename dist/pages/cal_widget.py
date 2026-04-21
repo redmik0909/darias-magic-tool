@@ -75,6 +75,11 @@ class GoogleCalWidget(ctk.CTkFrame):
         self.month_events = {}
         self.selected     = None
         self.view_mode    = "calendar"
+        # Dynamic sizing based on screen width
+        sw = parent.winfo_screenwidth()
+        self._scale      = max(0.75, min(1.0, sw / 1920))  # 0.75 at 1366, 1.0 at 1920+
+        self._cell_wrap  = max(60, int((sw - 200) * 0.6 / 7 - 20))
+        self._fs         = lambda s: max(7, int(s * self._scale))  # scaled font size
         self._build_skeleton()
 
     def _build_skeleton(self):
@@ -186,7 +191,7 @@ class GoogleCalWidget(ctk.CTkFrame):
         hdr.pack(fill="x", padx=4)
         hdr.columnconfigure(list(range(7)), weight=1)
         for i, j in enumerate(JOURS_FR):
-            label(hdr, j, size=10, weight="bold",
+            label(hdr, j, size=self._fs(10), weight="bold",
                   color=C["text_muted"]).grid(row=0, column=i, padx=2, pady=5, sticky="nsew")
 
         # Use a plain frame with grid — scales perfectly
@@ -230,7 +235,7 @@ class GoogleCalWidget(ctk.CTkFrame):
                                 border_width=bw, border_color=bc)
             cell.grid(row=row, column=col, padx=2, pady=2, sticky="nsew")
 
-            label(cell, str(day), size=11, weight="bold",
+            label(cell, str(day), size=self._fs(11), weight="bold",
                   color=C["accent"] if (is_today or is_sel) else
                   (C["text_dim"] if is_past else C["text"])
                   ).pack(anchor="nw", padx=4, pady=(3, 1))
@@ -257,30 +262,30 @@ class GoogleCalWidget(ctk.CTkFrame):
 
                     if start_h:
                         ctk.CTkLabel(top_c, text=start_h,
-                                     font=ctk.CTkFont(size=8, weight="bold"),
+                                     font=ctk.CTkFont(size=self._fs(8), weight="bold"),
                                      fg_color=C["red"] if is_full else C["green"],
                                      text_color="white",
                                      corner_radius=2).pack(side="left", padx=(0, 3))
 
                     ctk.CTkLabel(chip, text=name_s,
-                                 font=ctk.CTkFont(size=10, weight="bold"),
+                                 font=ctk.CTkFont(size=self._fs(10), weight="bold"),
                                  text_color="#1e293b",
-                                 wraplength=130, justify="left",
+                                 wraplength=self._cell_wrap, justify="left",
                                  anchor="w").pack(anchor="w", padx=3, pady=(1, 0))
 
                     if addr_s:
                         ctk.CTkLabel(chip, text=f"📍 {addr_s}",
-                                     font=ctk.CTkFont(size=9),
+                                     font=ctk.CTkFont(size=self._fs(9)),
                                      text_color="#64748b",
                                      anchor="w").pack(anchor="w", padx=3, pady=(0, 2))
 
                 if len(rdv_list) > 2:
                     ctk.CTkLabel(cell, text=f"+ {len(rdv_list)-2}",
-                                 font=ctk.CTkFont(size=8),
+                                 font=ctk.CTkFont(size=self._fs(8)),
                                  text_color=C["text_muted"]).pack(anchor="w", padx=4)
             elif not is_past and not blocked:
                 ctk.CTkLabel(cell, text="Libre",
-                             font=ctk.CTkFont(size=8),
+                             font=ctk.CTkFont(size=self._fs(8)),
                              text_color=C["text_dim"]).pack(padx=3, pady=1)
 
             if not is_past:
