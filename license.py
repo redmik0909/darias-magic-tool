@@ -9,6 +9,12 @@ from config import C, label, btn
 _APP_DATA    = os.path.join(os.environ.get("APPDATA", os.path.dirname(os.path.abspath(__file__))), "DariasMagicTool")
 os.makedirs(_APP_DATA, exist_ok=True)
 LICENSE_FILE = os.path.join(_APP_DATA, ".license")
+
+# Migration automatique — copie l'ancien .license vers AppData si nécessaire
+_OLD_LICENSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".license")
+if not os.path.exists(LICENSE_FILE) and os.path.exists(_OLD_LICENSE):
+    import shutil
+    shutil.copy(_OLD_LICENSE, LICENSE_FILE)
 SECRET_SALT  = "darias-magic-tool-2026-xK9#mP"
 
 
@@ -164,5 +170,7 @@ class ActivationWindow(ctk.CTkToplevel):
             self.key_entry.configure(border_color=C["red"])
 
     def _on_close(self):
-        # Can't close without activating
-        self.status_var.set("Vous devez activer le logiciel pour continuer.")
+        try:
+            self.status_var.set("Vous devez activer le logiciel pour continuer.")
+        except Exception:
+            pass

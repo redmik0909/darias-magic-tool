@@ -5,7 +5,7 @@ from datetime import datetime
 from config import C, ZONE_COLORS, label, btn
 from utils import geocode_address, find_zone, geocode_coords, osrm_route
 from google_cal import format_time
-from pages.cal_widget import GoogleCalWidget, find_cal_id, is_real_rdv, is_blocked_day, get_avoided_slots, MOIS_FR, JOURS_FR
+from pages.cal_widget import GoogleCalWidget, find_cal_id, is_real_rdv, is_blocked_day, get_avoided_slots, MOIS_FR, JOURS_FR, show_day_popup
 
 CRENEAUX = [
     ("9h00",  "9h00 – 10h00"),
@@ -106,7 +106,8 @@ class RecherchePage(ctk.CTkFrame):
         if not city:
             self.after(0, self._err, "Adresse introuvable")
             return
-        coords = geocode_coords(address)
+        # geocode_coords reuses the cached LocationIQ key — fast second call
+        coords = geocode_coords(full_address or address)
         if coords:
             self.client_coords = (coords[0], coords[1])
         zone, _ = find_zone(city, self.data)
@@ -142,11 +143,7 @@ class RecherchePage(ctk.CTkFrame):
         )
         self.cal_widget.pack(fill="both", expand=True)
 
-        self.suggest_btn = btn(self.left, "Calculer les suggestions",
-            self._start_suggestions,
-            width=220, height=36, color=C["green"], hover=C["green_h"])
-        self.suggest_btn.pack(padx=8, pady=8)
-
+        self._make_suggest_btn()
         threading.Thread(target=self._load_cal, daemon=True).start()
 
     def _load_cal(self):
@@ -185,16 +182,14 @@ class RecherchePage(ctk.CTkFrame):
             next_idx = self.prio_index + 1
             prev_idx = self.prio_index - 1
             if next_idx < len(self.zone_reps):
-                next_rep = self.zone_reps[next_idx]
-                btn(nav_row, f"P{next_rep['priorite']} ->",
-                    lambda: self._switch_prio(next_idx),
-                    width=80, height=32, color=C["accent"], hover=C["accent_h"]
+                btn(nav_row, "→",
+                    lambda i=next_idx: self._switch_prio(i),
+                    width=40, height=32, color=C["accent"], hover=C["accent_h"]
                     ).pack(side="right")
             if prev_idx >= 0:
-                prev_rep = self.zone_reps[prev_idx]
-                btn(nav_row, f"<- P{prev_rep['priorite']}",
-                    lambda: self._switch_prio(prev_idx),
-                    width=80, height=32, color=C["surface2"], hover=C["border"]
+                btn(nav_row, "←",
+                    lambda i=prev_idx: self._switch_prio(i),
+                    width=40, height=32, color=C["accent"], hover=C["accent_h"]
                     ).pack(side="right", padx=(0, 4))
 
         rep  = self.rep
@@ -204,9 +199,13 @@ class RecherchePage(ctk.CTkFrame):
 
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.pack(fill="x", padx=12, pady=(10, 4))
-        ctk.CTkLabel(top, text=f"  PRIORITE {rep['priorite']}  ",
+        prio        = rep["priorite"]
+        prio_colors = {1: C["green"], 2: C["orange"], 3: C["red"]}
+        prio_color  = prio_colors.get(prio, "#64748b")
+        prio_label  = f"PRIORITE {prio}" if prio <= 3 else "AUTRE"
+        ctk.CTkLabel(top, text=f"  {prio_label}  ",
                      font=ctk.CTkFont(size=10, weight="bold"),
-                     fg_color=C["p1"], text_color="white",
+                     fg_color=prio_color, text_color="white",
                      corner_radius=4).pack(side="left", padx=(0, 10))
         label(top, rep["nom"], size=15, weight="bold").pack(side="left")
 
@@ -258,11 +257,7 @@ class RecherchePage(ctk.CTkFrame):
 
         self._show_rep_info(zone)
 
-        self.suggest_btn = btn(self.left, "Calculer les suggestions",
-            self._start_suggestions,
-            width=220, height=36, color=C["green"], hover=C["green_h"])
-        self.suggest_btn.pack(padx=8, pady=8)
-
+        self._make_suggest_btn()
         self._clear_right()
         max_rdv = self.rep.get("rdv_par_jour") or 5
         self.cal_widget = GoogleCalWidget(
@@ -272,6 +267,14 @@ class RecherchePage(ctk.CTkFrame):
         )
         self.cal_widget.pack(fill="both", expand=True)
         threading.Thread(target=self._load_cal, daemon=True).start()
+
+    def _make_suggest_btn(self):
+        if hasattr(self, "suggest_btn") and self.suggest_btn.winfo_exists():
+            self.suggest_btn.destroy()
+        self.suggest_btn = btn(self.left, "Calculer les suggestions",
+            self._start_suggestions,
+            width=220, height=36, color=C["green"], hover=C["green_h"])
+        self.suggest_btn.pack(padx=8, pady=8)
 
     # ── Map ────────────────────────────────────────────────────────────────────
     def _open_map(self):
@@ -283,57 +286,8 @@ class RecherchePage(ctk.CTkFrame):
 
     # ── Day click ─────────────────────────────────────────────────────────────
     def _on_day_click(self, date_key, events):
-        self._show_day_popup(date_key, events)
-
-    def _show_day_popup(self, date_key, events):
-        day_parts = date_key.split("-")
-        day_fmt   = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]} {day_parts[0]}"
-        real_rdv  = [e for e in events if is_real_rdv(e)]
-
-        popup = ctk.CTkToplevel(self)
-        popup.title(f"RDV - {day_fmt}")
-        popup.geometry("500x420")
-        popup.configure(fg_color=C["bg"])
-        popup.attributes("-topmost", True)
-        popup.lift()
-        popup.focus_force()
-
-        hdr = ctk.CTkFrame(popup, fg_color="#1e3a5f", corner_radius=0)
-        hdr.pack(fill="x")
-        label(hdr, f"  {day_fmt} - {self.rep['nom']}",
-              size=14, weight="bold", color="#ffffff").pack(side="left", pady=12, padx=8)
-        label(hdr, f"{len(real_rdv)} RDV  ",
-              size=12, color="#93c5fd").pack(side="right", padx=8)
-
-        if not real_rdv:
-            label(popup, "Aucun RDV ce jour - journee libre!",
-                  size=13, color=C["green"]).pack(expand=True)
-        else:
-            scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
-            scroll.pack(fill="both", expand=True, padx=12, pady=12)
-            for e in real_rdv:
-                card = ctk.CTkFrame(scroll, fg_color=C["surface2"], corner_radius=6,
-                                    border_width=1, border_color=C["border"])
-                card.pack(fill="x", pady=4)
-                time_str = format_time(e["start"])
-                top_r    = ctk.CTkFrame(card, fg_color="transparent")
-                top_r.pack(fill="x", padx=12, pady=(8, 2))
-                ctk.CTkLabel(top_r, text=f" {time_str} ",
-                             font=ctk.CTkFont(size=11, weight="bold"),
-                             fg_color=C["accent"], text_color="white",
-                             corner_radius=4).pack(side="left", padx=(0, 8))
-                label(top_r, e.get("summary", "Sans titre"), size=12,
-                      weight="bold").pack(side="left")
-                if e.get("location"):
-                    label(card, f"   {e['location']}", size=11,
-                          color=C["text_muted"], anchor="w",
-                          wraplength=440).pack(anchor="w", padx=12, pady=(0, 8))
-                else:
-                    ctk.CTkFrame(card, fg_color="transparent", height=4).pack()
-
-        btn(popup, "Fermer", popup.destroy,
-            width=120, height=34, color=C["surface2"],
-            hover=C["border"]).pack(pady=(0, 12))
+        from pages.cal_widget import show_day_popup
+        show_day_popup(self, self.rep, date_key, events)
 
     # ── Suggestions ───────────────────────────────────────────────────────────
     def _show_suggestions_loading(self):

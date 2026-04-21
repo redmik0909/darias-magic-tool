@@ -508,23 +508,3 @@ def decode_polyline(encoded):
         lng += dlng
         coords.append((lat / 1e5, lng / 1e5))
     return coords
-
-# ── RDV Storage (legacy — kept for compatibility) ──────────────────────────────
-APP_DATA = os.path.join(os.environ.get("APPDATA", BASE_DIR), "DariasMagicTool")
-DATA_DIR = os.path.join(APP_DATA, "rdv_data")
-os.makedirs(DATA_DIR, exist_ok=True)
-
-def rep_data_file(rep_nom):
-    safe = re.sub(r"[^a-z0-9]", "_", normalize(rep_nom))
-    return os.path.join(DATA_DIR, f"{safe}.json")
-
-def load_rep_rdv(rep_nom):
-    f = rep_data_file(rep_nom)
-    if os.path.exists(f):
-        with open(f, "r", encoding="utf-8") as fp:
-            return json.load(fp)
-    return {}
-
-def save_rep_rdv(rep_nom, data):
-    with open(rep_data_file(rep_nom), "w", encoding="utf-8") as fp:
-        json.dump(data, fp, ensure_ascii=False, indent=2)

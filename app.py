@@ -7,7 +7,6 @@ from utils import load_zones
 from pages.accueil import AccueilPage
 from pages.recherche import RecherchePage
 from pages.equipe import EquipePage
-from pages.route import RoutePage
 from license import is_licensed, ActivationWindow
 
 CURRENT_VERSION = "2.4.6"
@@ -16,15 +15,10 @@ DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/late
 
 
 def _check_google_setup():
-    """Check if Google credentials password is in keyring."""
+    """Check if Google credentials password is saved in keyring."""
     try:
         import keyring
-        pwd = keyring.get_password("DariasMagicTool", "google_creds_password")
-        if not pwd:
-            return False
-        from crypto_utils import decrypt_credentials
-        data = decrypt_credentials()
-        return data is not None
+        return bool(keyring.get_password("DariasMagicTool", "google_creds_password"))
     except Exception:
         return False
 
@@ -89,9 +83,9 @@ class DariaApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Daria's Magic Tool")
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        self.geometry(f"{sw}x{sh}+0+0")
+        self.sw = self.winfo_screenwidth()
+        self.sh = self.winfo_screenheight()
+        self.geometry(f"{self.sw}x{self.sh}+0+0")
         self.minsize(700, 500)
         self.after(100, lambda: self.state("zoomed"))
         self.configure(fg_color=C["bg"])
@@ -112,8 +106,7 @@ class DariaApp(ctk.CTk):
     def _build_ui(self):
         # ── Sidebar ───────────────────────────────────────────────────────────
         # Responsive sidebar — 15% of screen width, min 160, max 220
-        sw = self.winfo_screenwidth()
-        sidebar_w = max(160, min(220, int(sw * 0.15)))
+        sidebar_w = max(160, min(220, int(self.sw * 0.15)))
         self.sidebar = ctk.CTkFrame(self, fg_color="#1e3a5f", corner_radius=0, width=sidebar_w)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
@@ -146,7 +139,6 @@ class DariaApp(ctk.CTk):
             ("accueil",   "🏠", "Accueil"),
             ("recherche", "🔍", "Recherche"),
             ("equipe",    "👥", "Équipe"),
-            ("route",     "🗺", "Route"),
         ]
         for key, icon, text in nav_items:
             row = ctk.CTkFrame(nav_frame, fg_color="transparent")
@@ -155,11 +147,11 @@ class DariaApp(ctk.CTk):
             b = ctk.CTkButton(
                 row,
                 text=f"   {icon}   {text}",
-                width=sidebar_w - 24, height=max(36, int(self.winfo_screenheight() * 0.055)),
+                width=sidebar_w - 24, height=max(36, int(self.sh * 0.055)),
                 corner_radius=10, anchor="w",
                 fg_color="transparent",
                 hover_color="#2a4a7f",
-                font=ctk.CTkFont(size=max(11, int(sw * 0.007))),
+                font=ctk.CTkFont(size=max(11, int(self.sw * 0.007))),
                 text_color="#bfdbfe",
                 command=lambda k=key: self._switch_tab(k)
             )
@@ -181,7 +173,6 @@ class DariaApp(ctk.CTk):
             "accueil":   AccueilPage(self.content),
             "recherche": RecherchePage(self.content, self.data),
             "equipe":    EquipePage(self.content, self.data),
-            "route":     RoutePage(self.content, self.data),
         }
         self._finish_build()
 
@@ -233,11 +224,38 @@ class DariaApp(ctk.CTk):
         row = ctk.CTkFrame(popup, fg_color="transparent")
         row.pack()
 
-        ctk.CTkButton(row, text="Télécharger la mise à jour",
+        def download_and_install():
+            import tempfile, subprocess
+            popup.destroy()
+            prog = ctk.CTkToplevel(self)
+            prog.title("Mise a jour")
+            prog.geometry("380x140")
+            prog.configure(fg_color=C["bg"])
+            prog.attributes("-topmost", True)
+            prog.grab_set()
+            label(prog, "Telechargement en cours...", size=13, color=C["text"]).pack(pady=(30, 10))
+            bar = ctk.CTkProgressBar(prog, width=300)
+            bar.pack()
+            bar.set(0)
+            bar.start()
+            def do_dl():
+                try:
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".exe")
+                    urllib.request.urlretrieve(DOWNLOAD_URL, tmp.name)
+                    tmp.close()
+                    prog.after(0, prog.destroy)
+                    subprocess.Popen([tmp.name])
+                    self.after(500, self.destroy)
+                except Exception:
+                    prog.after(0, prog.destroy)
+                    webbrowser.open(DOWNLOAD_URL)
+            threading.Thread(target=do_dl, daemon=True).start()
+
+        ctk.CTkButton(row, text="Installer maintenant",
                       width=200, height=38, corner_radius=6,
                       fg_color=C["green"], hover_color=C["green_h"],
                       font=ctk.CTkFont(size=12, weight="bold"),
-                      command=lambda: [webbrowser.open(DOWNLOAD_URL), popup.destroy()]
+                      command=download_and_install
                       ).pack(side="left", padx=6)
 
         ctk.CTkButton(row, text="Plus tard",

@@ -17,7 +17,6 @@ SKIP_KEYWORDS  = ["PAS DE RDV", "INDISPONIBLE", "CONGE", "CONGÉ", "FÉRIÉ", "F
 BLOCK_KEYWORDS = ["PAS DE RDV", "INDISPONIBLE", "CONGE", "CONGÉ", "FÉRIÉ", "FERIE"]
 AVOID_KEYWORDS = ["EVITER", "AVOID"]
 
-
 def is_real_rdv(e):
     if any(x in e.get("summary", "").upper() for x in SKIP_KEYWORDS):
         return False
@@ -54,7 +53,6 @@ def find_cal_id(rep):
         if cal_id:
             return cal_id
     return None
-
 
 class GoogleCalWidget(ctk.CTkFrame):
     """
@@ -112,8 +110,6 @@ class GoogleCalWidget(ctk.CTkFrame):
             command=self._to_list)
         self.btn_lst.pack(side="left", padx=2, pady=6)
 
-
-
         # Content area
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.pack(fill="both", expand=True)
@@ -135,8 +131,6 @@ class GoogleCalWidget(ctk.CTkFrame):
         except Exception:
             self.after(0, self._render)
 
-
-
     def _update_nav(self):
         y, m = self.cal_date.year, self.cal_date.month
         self.nav_lbl.configure(text=f"{MOIS_FR[m]} {y}")
@@ -157,21 +151,16 @@ class GoogleCalWidget(ctk.CTkFrame):
         self.btn_lst.configure(fg_color=C["accent"], text_color="white")
         self._render()
 
-
-
     def _prev(self):
-        m, y = self.cal_date.month - 1, self.cal_date.year
-        if m == 0: m, y = 12, y - 1
-        self.cal_date     = self.cal_date.replace(year=y, month=m, day=1)
-        self.month_events = {}
-        self._update_nav()
-        self._render()
-        if self.cal_id:
-            threading.Thread(target=self._fetch, daemon=True).start()
+        self._change_month(-1)
 
     def _next(self):
-        m, y = self.cal_date.month + 1, self.cal_date.year
-        if m == 13: m, y = 1, y + 1
+        self._change_month(1)
+
+    def _change_month(self, delta):
+        m, y = self.cal_date.month + delta, self.cal_date.year
+        if m == 0:  m, y = 12, y - 1
+        if m == 13: m, y = 1,  y + 1
         self.cal_date     = self.cal_date.replace(year=y, month=m, day=1)
         self.month_events = {}
         self._update_nav()
@@ -188,7 +177,6 @@ class GoogleCalWidget(ctk.CTkFrame):
 
     # ── Grid view ─────────────────────────────────────────────────────────────
     def _render_grid(self):
-        import tkinter as tk
         y, m  = self.cal_date.year, self.cal_date.month
         today = datetime.today()
         _, days_in_month = calendar.monthrange(y, m)
@@ -212,10 +200,7 @@ class GoogleCalWidget(ctk.CTkFrame):
         num_rows  = ((days_in_month + first_col - 1) // 7) + 1
         last_row  = num_rows - 1
         for r in range(num_rows):
-            # Last row gets less weight if incomplete
-            last_day_col = (first_col + days_in_month - 1) % 7
-            is_last = r == last_row
-            grid.rowconfigure(r, weight=1 if not is_last else 0, minsize=100)
+            grid.rowconfigure(r, weight=1 if r < last_row else 0, minsize=100)
 
         for day in range(1, days_in_month + 1):
             date_key   = f"{y}-{m:02d}-{day:02d}"
@@ -414,6 +399,60 @@ class GoogleCalWidget(ctk.CTkFrame):
                 for ww in w.winfo_children():
                     ww.bind("<Button-1>", _click)
 
+def show_day_popup(parent, rep, date_key, events):
+    """Shared popup — shows RDV details for a given day."""
+    from config import C, label, btn
+    day_parts = date_key.split("-")
+    day_fmt   = f"{int(day_parts[2])} {MOIS_FR[int(day_parts[1])]} {day_parts[0]}"
+    real_rdv  = [e for e in events if is_real_rdv(e)]
+
+    import customtkinter as ctk
+    popup = ctk.CTkToplevel(parent)
+    popup.title(f"RDV - {day_fmt}")
+    popup.geometry("500x420")
+    popup.configure(fg_color=C["bg"])
+    popup.attributes("-topmost", True)
+    popup.lift()
+    popup.focus_force()
+
+    hdr = ctk.CTkFrame(popup, fg_color="#1e3a5f", corner_radius=0)
+    hdr.pack(fill="x")
+    label(hdr, f"  {day_fmt} - {rep['nom']}",
+          size=14, weight="bold", color="#ffffff").pack(side="left", pady=12, padx=8)
+    label(hdr, f"{len(real_rdv)} RDV  ",
+          size=12, color="#93c5fd").pack(side="right", padx=8)
+
+    if not real_rdv:
+        label(popup, "Aucun RDV ce jour - journee libre!",
+              size=13, color=C["green"]).pack(expand=True)
+    else:
+        scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=12, pady=12)
+        for e in real_rdv:
+            card = ctk.CTkFrame(scroll, fg_color=C["surface2"], corner_radius=6,
+                                border_width=1, border_color=C["border"])
+            card.pack(fill="x", pady=4)
+            time_str = format_time(e["start"])
+            top_r    = ctk.CTkFrame(card, fg_color="transparent")
+            top_r.pack(fill="x", padx=12, pady=(8, 2))
+            ctk.CTkLabel(top_r, text=f" {time_str} ",
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         fg_color=C["accent"], text_color="white",
+                         corner_radius=4).pack(side="left", padx=(0, 8))
+            label(top_r, e.get("summary", "Sans titre"), size=12,
+                  weight="bold").pack(side="left")
+            if e.get("location"):
+                label(card, f"   {e['location']}", size=11,
+                      color=C["text_muted"], anchor="w",
+                      wraplength=440).pack(anchor="w", padx=12, pady=(0, 8))
+            else:
+                ctk.CTkFrame(card, fg_color="transparent", height=4).pack()
+
+    btn(popup, "Fermer", popup.destroy,
+        width=120, height=34, color=C["surface2"],
+        hover=C["border"]).pack(pady=(0, 12))
+
+
     def _on_click(self, date_key):
         self.selected = date_key
         self._render()
@@ -422,6 +461,3 @@ class GoogleCalWidget(ctk.CTkFrame):
 
     def get_month_events(self):
         return self.month_events
-
-    def get_avoided_slots_for_date(self, date_key):
-        return get_avoided_slots(self.month_events.get(date_key, []))
