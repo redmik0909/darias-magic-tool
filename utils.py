@@ -23,7 +23,7 @@ GEOCODIO_API_KEY = "6426426bb3d928dc1be1c39e6633d8c8419e624"
 _locationiq_key_cache = None
 
 def _load_locationiq_key():
-    """Load and cache LocationIQ key — decrypts only once per session."""
+    """Load and cache LocationIQ key — tries locationiq_pwd then google_creds_password."""
     global _locationiq_key_cache
     if _locationiq_key_cache is not None:
         return _locationiq_key_cache
@@ -42,20 +42,27 @@ def _load_locationiq_key():
             _locationiq_key_cache = ""
             return ""
 
-        pwd = keyring.get_password("DariasMagicTool", "locationiq_pwd")
-        if not pwd:
-            _locationiq_key_cache = ""
-            return ""
-
         with open(salt_file, "rb") as f:
             salt = f.read()
         with open(enc_file, "rb") as f:
             encrypted = f.read()
 
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480000)
-        key = base64.urlsafe_b64encode(kdf.derive(pwd.encode()))
-        _locationiq_key_cache = Fernet(key).decrypt(encrypted).decode()
-        return _locationiq_key_cache
+        # Try locationiq_pwd first, then google_creds_password as fallback
+        for keyring_key in ["locationiq_pwd", "google_creds_password"]:
+            pwd = keyring.get_password("DariasMagicTool", keyring_key)
+            if not pwd:
+                continue
+            try:
+                kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480000)
+                key = base64.urlsafe_b64encode(kdf.derive(pwd.encode()))
+                result = Fernet(key).decrypt(encrypted).decode()
+                _locationiq_key_cache = result
+                return result
+            except Exception:
+                continue
+
+        _locationiq_key_cache = ""
+        return ""
     except Exception:
         _locationiq_key_cache = ""
         return ""

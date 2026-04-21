@@ -2,14 +2,14 @@ import config  # noqa — must be imported first (sets DPI + theme)
 import customtkinter as ctk
 import urllib.request
 import threading
-from config import C, label
+from config import C, label, btn
 from utils import load_zones
 from pages.accueil import AccueilPage
 from pages.recherche import RecherchePage
 from pages.equipe import EquipePage
 from license import is_licensed, ActivationWindow
 
-CURRENT_VERSION = "2.4.8"
+CURRENT_VERSION = "2.4.9"
 VERSION_URL     = "https://raw.githubusercontent.com/redmik0909/darias-magic-tool/main/version.txt"
 DOWNLOAD_URL    = "https://github.com/redmik0909/darias-magic-tool/releases/latest/download/DariasMagicTool-Setup-latest.exe"
 
